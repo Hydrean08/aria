@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+data/
+*.log

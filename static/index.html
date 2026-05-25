@@ -1,0 +1,1365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aria</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:         #0f1117;
+      --surface:    #1a1d27;
+      --surface2:   #222535;
+      --border:     #2a2d3a;
+      --accent:     #7c6aff;
+      --accent-dim: #7c6aff22;
+      --green:      #22c55e;
+      --yellow:     #eab308;
+      --red:        #ef4444;
+      --text:       #e2e8f0;
+      --muted:      #64748b;
+      --radius:     10px;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Top bar ──────────────────────────────────────────── */
+    #topbar {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 16px 0 20px;
+      height: 54px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+      position: relative;
+      z-index: 50;
+    }
+    #topbar h1 { font-size: 19px; font-weight: 800; letter-spacing: 2px; color: var(--accent); flex-shrink: 0; }
+
+    #search-wrap {
+      flex: 1; max-width: 400px;
+      position: relative;
+    }
+    #search-wrap svg {
+      position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+      width: 14px; height: 14px; color: var(--muted); pointer-events: none;
+    }
+    #global-search {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      padding: 7px 12px 7px 34px;
+      font-size: 13px; outline: none;
+    }
+    #global-search:focus { border-color: var(--accent); }
+    #global-search::placeholder { color: var(--muted); }
+
+    /* search dropdown */
+    #search-drop {
+      position: absolute;
+      top: calc(100% + 6px); left: 0; right: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      z-index: 200;
+      max-height: 420px;
+      overflow-y: auto;
+      box-shadow: 0 16px 48px #00000070;
+      padding: 8px 0;
+    }
+    #search-drop.hidden { display: none; }
+    .drop-section { padding: 6px 14px 4px; font-size: 10px; font-weight: 700; letter-spacing: .8px; color: var(--muted); text-transform: uppercase; }
+    .drop-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 7px 14px; cursor: pointer;
+      transition: background .08s;
+    }
+    .drop-row:hover { background: var(--surface2); }
+    .drop-thumb {
+      width: 36px; height: 36px; border-radius: 4px;
+      background: var(--border); flex-shrink: 0; overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700; color: var(--muted);
+    }
+    .drop-thumb.round { border-radius: 50%; }
+    .drop-thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .drop-meta { flex: 1; min-width: 0; }
+    .drop-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .drop-sub  { font-size: 11px; color: var(--muted); }
+    .drop-badge { font-size: 10px; color: var(--green); font-weight: 700; }
+
+    .stat-pills { display: flex; gap: 14px; margin-left: auto; }
+    .stat-pill { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+    .stat-pill .n { font-weight: 700; }
+    .stat-pill.complete .n { color: var(--green); }
+    .stat-pill.partial  .n { color: var(--yellow); }
+    .stat-pill.active   .n { color: var(--accent); }
+    .stat-pill.error    .n { color: var(--red); }
+
+    #cycle-pill {
+      font-size: 11px; padding: 3px 10px; border-radius: 999px;
+      background: var(--border); color: var(--muted); flex-shrink: 0;
+    }
+    #cycle-pill.running { background: var(--accent-dim); color: var(--accent); }
+
+    /* ── App shell ────────────────────────────────────────── */
+    #app { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Sidebar ──────────────────────────────────────────── */
+    #sidebar {
+      width: 240px; flex-shrink: 0;
+      background: var(--surface);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+      overflow: hidden;
+    }
+    #sidebar-header {
+      padding: 10px; border-bottom: 1px solid var(--border);
+      display: flex; gap: 8px; align-items: center;
+    }
+    #sidebar-header input {
+      flex: 1; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text);
+      padding: 6px 10px; font-size: 13px; outline: none;
+    }
+    #sidebar-header input:focus { border-color: var(--accent); }
+    #sidebar-header input::placeholder { color: var(--muted); }
+    #artist-list { overflow-y: auto; flex: 1; }
+
+    .artist-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 12px; cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+    }
+    .artist-row:hover { background: #ffffff06; }
+    .artist-row.selected { background: var(--accent-dim); border-left: 3px solid var(--accent); padding-left: 9px; }
+    .artist-avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--border); flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 700; color: var(--muted); overflow: hidden;
+    }
+    .artist-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .artist-meta { flex: 1; min-width: 0; }
+    .artist-meta .name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .artist-meta .count { font-size: 11px; color: var(--muted); margin-top: 1px; }
+    .artist-row-btn {
+      display: none; background: transparent; border: none;
+      color: var(--muted); cursor: pointer; font-size: 15px;
+      padding: 2px 5px; border-radius: 4px; line-height: 1;
+    }
+    .artist-row:hover .artist-row-btn { display: block; }
+    .artist-row-btn:hover { color: var(--text); background: var(--border); }
+
+    /* ── Content ──────────────────────────────────────────── */
+    #content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* ── Home view ────────────────────────────────────────── */
+    #home-view { flex: 1; overflow-y: auto; padding: 28px 28px 12px; }
+    #home-view.hidden { display: none; }
+
+    .section-block { margin-bottom: 32px; }
+    .section-head  { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+    .section-title { font-size: 18px; font-weight: 800; }
+    .section-sub   { font-size: 12px; color: var(--muted); }
+
+    .scroll-row {
+      display: flex; gap: 12px;
+      overflow-x: auto; padding-bottom: 6px;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+    .scroll-row::-webkit-scrollbar { height: 3px; }
+    .scroll-row::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .scroll-row > * { scroll-snap-align: start; flex-shrink: 0; }
+
+    /* home artist card */
+    .h-artist-card {
+      width: 140px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 14px 10px 12px;
+      display: flex; flex-direction: column; align-items: center; gap: 8px;
+      cursor: pointer; transition: background .1s, transform .12s;
+    }
+    .h-artist-card:hover { background: var(--surface2); transform: translateY(-2px); }
+    .h-artist-avatar {
+      width: 72px; height: 72px; border-radius: 50%;
+      background: var(--border); overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 20px; font-weight: 700; color: var(--muted);
+    }
+    .h-artist-avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .h-artist-name {
+      font-size: 12px; font-weight: 600; text-align: center; line-height: 1.3;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .h-artist-tag { font-size: 10px; font-weight: 700; }
+    .tag-library { color: var(--green); }
+    .tag-add { color: var(--accent); }
+
+    /* home album card */
+    .h-album-card {
+      width: 148px; background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden;
+      cursor: pointer; transition: transform .12s, box-shadow .12s;
+    }
+    .h-album-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px #0009; }
+    .h-album-cover {
+      width: 148px; height: 148px; background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 32px; overflow: hidden; position: relative;
+    }
+    .h-album-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .h-album-info { padding: 8px 10px 10px; }
+    .h-album-title {
+      font-size: 12px; font-weight: 600; line-height: 1.3; margin-bottom: 2px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .h-album-artist { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Artist view ──────────────────────────────────────── */
+    #artist-view { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+    #artist-view.hidden { display: none; }
+
+    /* hero */
+    #artist-hero {
+      min-height: 260px;
+      background: var(--surface2);
+      background-size: cover;
+      background-position: center 25%;
+      position: relative;
+      display: flex; align-items: flex-end;
+      flex-shrink: 0;
+    }
+    #artist-hero::after {
+      content: '';
+      position: absolute; inset: 0;
+      background: linear-gradient(to bottom, rgba(15,17,23,.35) 0%, rgba(15,17,23,.75) 55%, #0f1117 100%);
+    }
+    .hero-content {
+      position: relative; z-index: 1;
+      display: flex; align-items: flex-end; gap: 20px;
+      width: 100%; padding: 20px 28px;
+    }
+    #hero-name {
+      font-size: 46px; font-weight: 900; line-height: 1; flex: 1;
+      text-shadow: 0 2px 12px rgba(0,0,0,.6);
+    }
+    .hero-actions { display: flex; gap: 8px; align-items: center; flex-shrink: 0; }
+
+    /* artist body */
+    #artist-body { padding: 0 28px 28px; }
+
+    /* popular songs */
+    .songs-section { margin: 22px 0 28px; }
+    .songs-section h3 { font-size: 14px; font-weight: 700; letter-spacing: .4px; margin-bottom: 6px; color: var(--muted); text-transform: uppercase; }
+    .track-list { display: flex; flex-direction: column; }
+    .track-row {
+      display: grid;
+      grid-template-columns: 24px 44px 1fr auto 34px;
+      align-items: center; gap: 12px;
+      padding: 7px 10px; border-radius: 6px;
+      transition: background .1s;
+    }
+    .track-row:hover { background: var(--surface2); }
+    .track-num { font-size: 13px; color: var(--muted); text-align: center; }
+    .track-thumb {
+      width: 40px; height: 40px; border-radius: 4px;
+      object-fit: cover; background: var(--border); display: block;
+    }
+    .track-info { min-width: 0; }
+    .track-title { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-album-label { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .track-dur { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .track-dl-btn {
+      background: transparent; border: none; color: var(--muted);
+      font-size: 16px; cursor: pointer; padding: 4px; border-radius: 4px;
+      opacity: 0; transition: opacity .1s, color .1s; line-height: 1;
+    }
+    .track-row:hover .track-dl-btn { opacity: 1; }
+    .track-dl-btn:hover { color: var(--accent); opacity: 1 !important; background: var(--accent-dim); }
+
+    /* discography */
+    .disc-section h3 { font-size: 14px; font-weight: 700; letter-spacing: .4px; margin-bottom: 12px; color: var(--muted); text-transform: uppercase; }
+    .disc-tabs { display: flex; gap: 6px; margin-bottom: 16px; }
+    .disc-tab {
+      padding: 5px 16px; border-radius: 999px;
+      font-size: 12px; font-weight: 600;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--border); cursor: pointer;
+      transition: background .1s, color .1s, border-color .1s;
+    }
+    .disc-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .disc-tab:hover:not(.active) { border-color: var(--muted); color: var(--text); }
+
+    #album-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+      gap: 12px;
+    }
+    .album-card {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); overflow: hidden; position: relative;
+      transition: transform .15s, box-shadow .15s, opacity .2s;
+      cursor: pointer;
+    }
+    .album-card:hover { transform: translateY(-2px); box-shadow: 0 8px 24px #0009; }
+    .album-cover {
+      width: 100%; aspect-ratio: 1;
+      background: var(--surface2);
+      display: flex; align-items: center; justify-content: center;
+      color: var(--muted); font-size: 36px;
+      position: relative; overflow: hidden;
+    }
+    .album-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .album-overlay {
+      position: absolute; inset: 0;
+      background: #00000088;
+      display: flex; align-items: center; justify-content: center;
+      gap: 6px; flex-wrap: wrap; padding: 8px;
+      opacity: 0; transition: opacity .15s;
+    }
+    .album-card:hover .album-overlay { opacity: 1; }
+    .album-body { padding: 9px 10px; }
+    .album-body .title {
+      font-weight: 600; font-size: 12px; line-height: 1.35; margin-bottom: 2px;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .album-body .year { color: var(--muted); font-size: 11px; }
+    .album-body .badge { display: inline-block; margin-top: 5px; }
+
+    /* related artists section */
+    .related-section { margin-top: 32px; padding-bottom: 20px; }
+    .related-section h3 { font-size: 14px; font-weight: 700; letter-spacing: .4px; margin-bottom: 12px; color: var(--muted); text-transform: uppercase; }
+
+    /* albums toolbar */
+    #albums-toolbar {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 12px;
+    }
+    #albums-toolbar h2 { font-size: 12px; color: var(--muted); font-weight: 600; letter-spacing: .5px; flex: 1; }
+
+    /* ── Log drawer ───────────────────────────────────────── */
+    #log-drawer { border-top: 1px solid var(--border); background: var(--surface); flex-shrink: 0; }
+    #log-drawer-header {
+      display: flex; align-items: center; padding: 7px 24px;
+      cursor: pointer; user-select: none;
+      font-size: 11px; color: var(--muted); font-weight: 600; letter-spacing: .5px; gap: 8px;
+    }
+    #log-drawer-header:hover { background: #ffffff05; }
+    #log-toggle { margin-left: auto; }
+    #log-body {
+      font-family: 'Cascadia Code', 'Fira Code', monospace; font-size: 11.5px;
+      height: 150px; overflow-y: auto; padding: 6px 24px 10px;
+    }
+    #log-body.collapsed { display: none; }
+    .log-entry { display: flex; gap: 10px; margin-bottom: 2px; line-height: 1.55; }
+    .log-time  { color: var(--muted); flex-shrink: 0; }
+    .log-info  { color: var(--text); }
+    .log-warn  { color: var(--yellow); }
+    .log-error { color: var(--red); }
+
+    /* ── Modal ────────────────────────────────────────────── */
+    .modal-backdrop {
+      position: fixed; inset: 0; background: #00000090;
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .modal-backdrop.hidden { display: none; }
+    .modal {
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 22px; width: 340px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    .modal.modal-lg { width: 560px; max-height: 80vh; overflow-y: auto; }
+    .modal h3 { font-size: 15px; font-weight: 700; }
+
+    #album-modal-header { display: flex; gap: 14px; align-items: flex-start; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+    .album-modal-thumb {
+      width: 72px; height: 72px; border-radius: 6px; flex-shrink: 0;
+      background: var(--surface2); overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 24px; color: var(--muted);
+    }
+    .album-modal-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .album-modal-meta { flex: 1; min-width: 0; padding-top: 4px; }
+    .album-modal-meta h3 { font-size: 17px; font-weight: 800; margin-bottom: 4px; }
+    #album-modal-sub { font-size: 12px; color: var(--muted); }
+    .modal input {
+      width: 100%; background: var(--bg); border: 1px solid var(--border);
+      border-radius: 6px; color: var(--text); padding: 8px 12px; font-size: 14px; outline: none;
+    }
+    .modal input:focus { border-color: var(--accent); }
+    .modal input::placeholder { color: var(--muted); }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+    /* ── Shared ───────────────────────────────────────────── */
+    button {
+      background: var(--accent); color: #fff; border: none; border-radius: 6px;
+      padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600;
+      transition: opacity .15s; white-space: nowrap;
+    }
+    button:hover { opacity: .85; }
+    button.sm { padding: 5px 11px; font-size: 12px; }
+    button.pill { padding: 4px 12px; font-size: 11px; border-radius: 999px; }
+    button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    button.ghost:hover { color: var(--text); border-color: var(--muted); opacity: 1; }
+    button.danger { background: var(--red); }
+    button.overlay-btn {
+      background: transparent; border: 1px solid #ffffff70;
+      color: #fff; padding: 6px 14px; font-size: 12px;
+    }
+    button.overlay-btn:hover { background: #ffffff22; opacity: 1; }
+
+    .badge { font-size: 10px; padding: 2px 7px; border-radius: 999px; font-weight: 700; letter-spacing: .3px; }
+    .badge-complete    { background: #22c55e20; color: var(--green); }
+    .badge-missing     { background: #64748b20; color: var(--muted); }
+    .badge-downloading { background: #7c6aff20; color: var(--accent); }
+    .badge-partial     { background: #eab30820; color: var(--yellow); }
+    .badge-error       { background: #ef444420; color: var(--red); }
+@keyframes badge-pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
+.badge-downloading { animation: badge-pulse 1.5s ease-in-out infinite; }
+.disc-search { width: 100%; padding: 7px 11px; background: var(--bg); border: 1px solid #2a2d3a; border-radius: 7px; color: var(--text); font-size: 13px; margin-bottom: 10px; outline: none; }
+.disc-search:focus { border-color: var(--accent); }
+#log-expand { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 4px; margin-left: 4px; }
+#log-expand:hover { color: var(--text); }
+
+    .empty { color: var(--muted); padding: 28px; text-align: center; font-style: italic; font-size: 13px; }
+    .loading { color: var(--muted); padding: 16px 0; font-size: 13px; }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    /* ── Hamburger (mobile only) ──────────────────────────── */
+    #btn-menu {
+      display: none;
+      background: transparent; border: none; color: var(--text);
+      padding: 8px; cursor: pointer; flex-shrink: 0;
+      line-height: 1; font-size: 20px; min-width: 44px; min-height: 44px;
+      align-items: center; justify-content: center;
+    }
+
+    /* ── Sidebar drawer backdrop ──────────────────────────── */
+    #sidebar-backdrop {
+      display: none;
+      position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      z-index: 49;
+    }
+    #sidebar-backdrop.visible { display: block; }
+
+    /* ── Mobile media queries ─────────────────────────────── */
+    @media (max-width: 768px) {
+      body { overflow: auto; height: auto; min-height: 100vh; }
+
+      #topbar { gap: 8px; padding: 0 10px; height: 52px; }
+      #topbar h1 { font-size: 16px; }
+      #btn-back { display: none !important; } /* use hamburger instead */
+      #search-wrap { max-width: none; flex: 1; }
+      .stat-pills { display: none; }
+      #cycle-pill { display: none; }
+      #topbar > button:last-of-type { display: none; } /* Run Cycle hidden on mobile */
+      #btn-menu { display: flex; }
+
+      #app { flex-direction: column; overflow: visible; }
+
+      #sidebar {
+        position: fixed; top: 52px; left: 0; bottom: 0;
+        z-index: 50;
+        transform: translateX(-100%);
+        transition: transform .25s ease;
+        width: min(280px, 85vw);
+      }
+      #sidebar.open { transform: translateX(0); }
+
+      #content { flex: 1; overflow: visible; width: 100%; }
+      #home-view { padding: 16px 16px 12px; }
+      #artist-body { padding: 0 16px 24px; }
+      #artist-hero { min-height: 180px; }
+      #hero-name { font-size: 28px; }
+      .hero-actions { flex-wrap: wrap; gap: 6px; }
+      .hero-actions button { font-size: 12px; padding: 6px 12px; }
+
+      #artist-view, #home-view { overflow-y: auto; }
+
+      #album-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+
+      .track-row { grid-template-columns: 24px 40px 1fr auto 40px; gap: 8px; padding: 9px 4px; }
+      .track-dl-btn { opacity: 1; } /* always visible on touch */
+
+      #log-drawer-header { padding: 10px 16px; min-height: 44px; }
+      #log-body { padding: 6px 16px 10px; }
+
+      .modal { width: calc(100vw - 32px) !important; }
+      .modal.modal-lg { max-height: 90vh; }
+
+      button { min-height: 40px; }
+      button.sm { min-height: 36px; }
+      button.pill { min-height: 32px; }
+
+      .disc-tabs { flex-wrap: wrap; }
+      .disc-tab { min-height: 36px; }
+
+      .h-artist-card { width: 120px; }
+      .h-album-cover { width: 120px; height: 120px; }
+      .h-album-card { width: 120px; }
+
+      .section-title { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<div id="sidebar-backdrop" onclick="closeSidebar()" aria-hidden="true"></div>
+
+<header id="topbar">
+  <button id="btn-menu" onclick="toggleSidebar()" aria-label="Open library" aria-expanded="false">☰</button>
+  <h1 id="logo" onclick="showHome()" role="button" tabindex="0"
+      onkeydown="if(event.key==='Enter'||event.key===' ')showHome()"
+      style="cursor:pointer" title="Home">ARIA</h1>
+  <button id="btn-back" class="ghost sm" onclick="showHome()"
+          style="display:none" aria-label="Back to home">← Back</button>
+
+  <div id="search-wrap">
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    </svg>
+    <input type="search" id="global-search" autocomplete="off"
+           placeholder="Search artists…" aria-label="Search artists"
+           oninput="onGlobalSearch()" onfocus="onGlobalSearch()">
+    <div id="search-drop" class="hidden" role="listbox" aria-label="Search results"></div>
+  </div>
+
+  <div class="stat-pills">
+    <div class="stat-pill complete"><span class="n" id="s-complete">—</span> done</div>
+    <div class="stat-pill partial"><span class="n" id="s-partial">—</span> partial</div>
+    <div class="stat-pill missing"><span class="n" id="s-missing">—</span> queued</div>
+    <div class="stat-pill active"><span class="n" id="s-downloading">—</span> dl</div>
+    <div class="stat-pill error"><span class="n" id="s-error">—</span> err</div>
+  </div>
+
+  <span id="cycle-pill" aria-live="polite">Idle</span>
+  <button class="ghost sm" onclick="triggerCycle()">Run Cycle</button>
+</header>
+
+<div id="app">
+
+  <nav id="sidebar" aria-label="Your library">
+    <div id="sidebar-header">
+      <input type="search" id="artist-search" placeholder="Filter library…"
+             aria-label="Filter library" oninput="renderArtistList()">
+      <button class="sm" onclick="openModal('modal-add-artist')" title="Add artist" aria-label="Add artist">+</button>
+    </div>
+    <div id="artist-list" role="list"><div class="empty">No artists yet.</div></div>
+  </nav>
+
+  <main id="content">
+
+    <!-- ── Home view ─────────────────────────────────────── -->
+    <div id="home-view">
+
+      <div class="section-block" id="sec-recent" style="display:none">
+        <div class="section-head">
+          <span class="section-title">Recently Downloaded</span>
+        </div>
+        <div class="scroll-row" id="row-recent"></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">Trending Artists</span>
+          <span class="section-sub">Global charts</span>
+        </div>
+        <div class="scroll-row" id="row-trending"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">New Releases</span>
+        </div>
+        <div class="scroll-row" id="row-releases"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">Based on Your Library</span>
+        </div>
+        <div class="scroll-row" id="row-similar"><div class="loading">Loading…</div></div>
+      </div>
+
+    </div>
+
+    <!-- ── Artist view ───────────────────────────────────── -->
+    <div id="artist-view" class="hidden">
+
+      <div id="artist-hero">
+        <div class="hero-content">
+          <div id="hero-name"></div>
+          <div class="hero-actions">
+            <button onclick="confirmDiscography()" title="Download entire discography">Download Discography</button>
+            <button class="ghost sm" id="btn-resync" onclick="resyncArtist()" title="Re-sync discography from Deezer">Resync</button>
+            <button class="ghost sm" id="btn-monitor" onclick="toggleMonitorSelected()">Pause</button>
+            <button class="danger sm" onclick="removeArtistSelected()">Remove</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="artist-body">
+
+        <div class="songs-section">
+          <h3>Popular Songs</h3>
+          <div class="track-list" id="track-list"><div class="loading">Loading…</div></div>
+        </div>
+
+        <div class="disc-section">
+          <div id="albums-toolbar">
+            <h2 id="albums-count">DISCOGRAPHY</h2>
+            <button class="ghost sm" onclick="ignoreAll()" title="Ignore all">Ignore All</button>
+            <button class="ghost sm" onclick="openModal('modal-add-album')">+ Album</button>
+          </div>
+          <input class="disc-search" id="discSearch" type="search" placeholder="Search albums…" oninput="renderAlbumGrid()" aria-label="Search discography">
+  <div class="disc-tabs" role="tablist">
+            <button class="disc-tab active" role="tab" aria-selected="true"  onclick="filterDisc('all')"   >All</button>
+            <button class="disc-tab"        role="tab" aria-selected="false" onclick="filterDisc('album')" >Albums</button>
+            <button class="disc-tab"        role="tab" aria-selected="false" onclick="filterDisc('ep')"    >EPs</button>
+            <button class="disc-tab"        role="tab" aria-selected="false" onclick="filterDisc('single')">Singles</button>
+          </div>
+          <div id="album-grid" role="list"></div>
+        </div>
+
+        <div class="related-section">
+          <h3>Fans Also Like</h3>
+          <div class="scroll-row" id="row-related"><div class="loading">Loading…</div></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Log drawer ────────────────────────────────────── -->
+    <div id="log-drawer">
+      <div id="log-drawer-header" onclick="toggleLogs()" role="button"
+           aria-expanded="true" tabindex="0"
+           onkeydown="if(event.key==='Enter'||event.key===' ')toggleLogs()">
+        ACTIVITY LOG
+        <span id="log-toggle" aria-hidden="true">▲</span>
+      </div>
+      <div id="log-body" role="log" aria-live="polite"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Album tracks modal -->
+<div class="modal-backdrop hidden" id="modal-album-tracks" role="dialog" aria-modal="true" aria-labelledby="lbl-album-tracks">
+  <div class="modal modal-lg">
+    <div id="album-modal-header">
+      <div id="album-modal-cover" class="album-modal-thumb" aria-hidden="true">♪</div>
+      <div class="album-modal-meta">
+        <h3 id="lbl-album-tracks"></h3>
+        <div id="album-modal-sub"></div>
+      </div>
+    </div>
+    <div class="track-list" id="album-track-list"></div>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeModal('modal-album-tracks')">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Artist modal -->
+<div class="modal-backdrop hidden" id="modal-add-artist" role="dialog" aria-modal="true" aria-labelledby="lbl-add-artist">
+  <div class="modal">
+    <h3 id="lbl-add-artist">Add Artist</h3>
+    <input type="text" id="input-artist-name" placeholder="Artist name…"
+           onkeydown="if(event.key==='Enter')submitAddArtist()">
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeModal('modal-add-artist')">Cancel</button>
+      <button onclick="submitAddArtist()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Album modal -->
+<div class="modal-backdrop hidden" id="modal-add-album" role="dialog" aria-modal="true" aria-labelledby="lbl-add-album">
+  <div class="modal">
+    <h3 id="lbl-add-album">Add Album Manually</h3>
+    <input type="text" id="input-album-title" placeholder="Album title…"
+           onkeydown="if(event.key==='Enter')document.getElementById('input-album-year').focus()">
+    <input type="text" id="input-album-year" placeholder="Year (optional)"
+           onkeydown="if(event.key==='Enter')submitAddAlbum()">
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeModal('modal-add-album')">Cancel</button>
+      <button onclick="submitAddAlbum()">Add</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let allArtists      = [];
+  let selectedArtist  = null;
+  let currentAlbums   = [];
+  let currentDiscFilter = 'all';
+  let logsCollapsed   = false;
+  let searchTimer     = null;
+  let homeLoaded      = false;
+
+  // ── Sidebar drawer (mobile) ──────────────────────────────────────────
+
+  function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const open = sidebar.classList.toggle('open');
+    document.getElementById('sidebar-backdrop').classList.toggle('visible', open);
+    document.getElementById('btn-menu').setAttribute('aria-expanded', open);
+  }
+
+  function closeSidebar() {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebar-backdrop').classList.remove('visible');
+    document.getElementById('btn-menu').setAttribute('aria-expanded', 'false');
+  }
+
+  // ── Utility ─────────────────────────────────────────────────────────
+
+  function esc(s) {
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  function fmtDur(secs) {
+    const m = Math.floor(secs / 60), s = String(secs % 60).padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  function bigImg(url) {
+    return url ? url.replace('/250x250-', '/500x500-') : '';
+  }
+
+  async function api(method, path, body) {
+    const opts = { method, headers: { 'Content-Type': 'application/json', 'X-API-Key': window._apiKey || '' } };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    const r = await fetch('/api' + path, opts);
+    if (!r.ok) throw new Error(await r.text());
+    return r.status === 204 ? null : r.json();
+  }
+
+  function openModal(id) {
+    const el = document.getElementById(id);
+    el.classList.remove('hidden');
+    el.querySelectorAll('input').forEach(i => i.value = '');
+    const first = el.querySelector('input');
+    if (first) setTimeout(() => first.focus(), 30);
+  }
+  function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+  document.querySelectorAll('.modal-backdrop').forEach(el => {
+    el.addEventListener('click', e => { if (e.target === el) el.classList.add('hidden'); });
+  });
+
+  // Close search drop on outside click
+  document.addEventListener('click', e => {
+    if (!document.getElementById('search-wrap').contains(e.target)) {
+      document.getElementById('search-drop').classList.add('hidden');
+    }
+  });
+
+  // ── Stats ────────────────────────────────────────────────────────────
+
+  async function retryAlbumCard(albumId) {
+    await api('POST', `/albums/${albumId}/retry`);
+    showToast('Retry queued');
+    if (selectedArtist) loadAlbums(selectedArtist.id);
+  }
+
+let logExpanded = false;
+function expandLogs() {
+  logExpanded = !logExpanded;
+  document.getElementById('log-body').style.height = logExpanded ? '350px' : '150px';
+  document.getElementById('log-expand').textContent = logExpanded ? '⤡' : '⤢';
+}
+
+async function loadStats() {
+    try {
+      const s = await api('GET', '/stats');
+      document.getElementById('s-complete').textContent    = s.complete;
+      document.getElementById('s-partial').textContent     = s.partial;
+      document.getElementById('s-missing').textContent     = s.pending;
+      document.getElementById('s-downloading').textContent = s.downloading;
+      document.getElementById('s-error').textContent       = s.error;
+      const pill = document.getElementById('cycle-pill');
+      pill.textContent = s.cycle_running ? 'Running…' : 'Idle';
+      pill.className   = s.cycle_running ? 'running' : '';
+    } catch (_) {}
+  }
+
+  // ── Sidebar artists ──────────────────────────────────────────────────
+
+  async function loadArtists() {
+    try { allArtists = await api('GET', '/artists'); } catch (_) { return; }
+    renderArtistList();
+  }
+
+  function renderArtistList() {
+    const q = document.getElementById('artist-search').value.toLowerCase();
+    const list = q ? allArtists.filter(a => a.name.toLowerCase().includes(q)) : allArtists;
+    const el = document.getElementById('artist-list');
+    if (!list.length) { el.innerHTML = '<div class="empty">No artists.</div>'; return; }
+    el.innerHTML = list.map(a => {
+      const initials = a.name.split(' ').map(w => w[0]).slice(0,2).join('').toUpperCase();
+      const avatar = a.image_url ? `<img src="${esc(a.image_url)}" alt="" loading="lazy">` : initials;
+      const sel = selectedArtist && selectedArtist.id === a.id ? 'selected' : '';
+      const count = a.album_total > 0 ? `${a.album_done}/${a.album_total} albums` : 'No albums';
+      return `
+        <div class="artist-row ${sel}" onclick="selectArtist(${a.id})" role="listitem">
+          <div class="artist-avatar" aria-hidden="true">${avatar}</div>
+          <div class="artist-meta">
+            <div class="name">${esc(a.name)}</div>
+            <div class="count">${count}</div>
+          </div>
+          <button class="artist-row-btn"
+                  onclick="event.stopPropagation();toggleMonitor(${a.id},${a.monitored})"
+                  aria-label="${a.monitored ? 'Pause' : 'Resume'} ${esc(a.name)}">${a.monitored ? '⏸' : '▶'}</button>
+        </div>`;
+    }).join('');
+  }
+
+  // ── View switching ───────────────────────────────────────────────────
+
+  function showHome() {
+    closeSidebar();
+    selectedArtist = null;
+    document.getElementById('home-view').classList.remove('hidden');
+    document.getElementById('artist-view').classList.add('hidden');
+    document.getElementById('btn-back').style.display = 'none';
+    renderArtistList();
+    if (!homeLoaded) { homeLoaded = true; loadHome(); }
+  }
+
+  async function selectArtist(id) {
+    selectedArtist = allArtists.find(a => a.id === id);
+    if (!selectedArtist) return;
+    closeSidebar();
+    document.getElementById('home-view').classList.add('hidden');
+    document.getElementById('artist-view').classList.remove('hidden');
+    document.getElementById('btn-back').style.display = '';
+    renderArtistList();
+    renderHero(selectedArtist);
+    currentDiscFilter = 'all';
+    setDiscTab('all');
+    const ds = document.getElementById('discSearch');
+    if (ds) ds.value = '';
+    document.getElementById('track-list').innerHTML = '<div class="loading">Loading…</div>';
+    document.getElementById('row-related').innerHTML = '<div class="loading">Loading…</div>';
+    await Promise.all([
+      loadAlbums(id),
+      loadTopTracks(id),
+      loadRelated(id),
+    ]);
+  }
+
+  function renderHero(artist) {
+    const hero = document.getElementById('artist-hero');
+    const large = bigImg(artist.image_url);
+    if (large) {
+      hero.style.backgroundImage = `url('${large}')`;
+    } else {
+      hero.style.backgroundImage = '';
+      hero.style.background = 'linear-gradient(135deg, #1e1b4b, var(--surface2))';
+    }
+    document.getElementById('hero-name').textContent = artist.name;
+    document.getElementById('btn-monitor').textContent = artist.monitored ? 'Pause' : 'Resume';
+  }
+
+  // ── Top tracks ───────────────────────────────────────────────────────
+
+  async function loadTopTracks(artistId) {
+    const el = document.getElementById('track-list');
+    try {
+      const tracks = await api('GET', `/artists/${artistId}/top-tracks`);
+      if (!tracks.length) { el.innerHTML = '<div class="empty">No track data available.</div>'; return; }
+      el.innerHTML = tracks.map((t, i) => {
+        const thumb = t.album_cover
+          ? `<img class="track-thumb" src="${esc(t.album_cover)}" alt="" loading="lazy">`
+          : `<div class="track-thumb" style="background:var(--border)"></div>`;
+        return `
+          <div class="track-row">
+            <span class="track-num">${i + 1}</span>
+            ${thumb}
+            <div class="track-info">
+              <div class="track-title">${esc(t.title)}</div>
+              <div class="track-album-label">${esc(t.album_title)}</div>
+            </div>
+            <span class="track-dur">${fmtDur(t.duration)}</span>
+            <button class="track-dl-btn" title="Download track"
+                    data-id="${esc(t.id)}" data-title="${esc(t.title)}"
+                    data-album="${esc(t.album_title)}" data-year="${esc(t.year)}"
+                    onclick="downloadTrack(this)">↓</button>
+          </div>`;
+      }).join('');
+    } catch (_) {
+      el.innerHTML = '<div class="empty">Could not load tracks.</div>';
+    }
+  }
+
+  async function downloadTrack(btn) {
+    const { id, title, album, year } = btn.dataset;
+    const artist = selectedArtist?.name ?? '';
+    btn.textContent = '…'; btn.disabled = true;
+    try {
+      await api('POST', '/tracks/download', { track_id: id, title, artist, album, year: year || '' });
+      btn.textContent = '✓'; btn.style.color = 'var(--green)';
+    } catch (_) {
+      btn.textContent = '↓'; btn.disabled = false;
+    }
+  }
+
+  // ── Album track modal ────────────────────────────────────────────────
+
+  async function openAlbum(albumId) {
+    const album = currentAlbums.find(a => a.id === albumId);
+    if (!album) return;
+
+    const coverEl = document.getElementById('album-modal-cover');
+    coverEl.innerHTML = album.cover_url
+      ? `<img src="${esc(album.cover_url)}" alt="">`
+      : '♪';
+    document.getElementById('lbl-album-tracks').textContent = album.title;
+    document.getElementById('album-modal-sub').textContent =
+      [album.year, album.track_count ? `${album.track_count} tracks` : null]
+        .filter(Boolean).join(' · ');
+    document.getElementById('album-track-list').innerHTML = '<div class="loading">Loading…</div>';
+    openModal('modal-album-tracks');
+
+    try {
+      const tracks = await api('GET', `/albums/${albumId}/tracks`);
+      if (!tracks.length) {
+        document.getElementById('album-track-list').innerHTML =
+          '<div class="empty">No tracks found on Deezer for this album.</div>';
+        return;
+      }
+      const artistName = selectedArtist?.name ?? '';
+      const thumbHtml = album.cover_url
+        ? `<img src="${esc(album.cover_url)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:4px;">`
+        : '';
+      document.getElementById('album-track-list').innerHTML = tracks.map((t, i) => `
+        <div class="track-row">
+          <span class="track-num">${t.track_number || i + 1}</span>
+          <div class="track-thumb" style="background:var(--border);border-radius:4px;">${thumbHtml}</div>
+          <div class="track-info">
+            <div class="track-title">${esc(t.title)}</div>
+            <div class="track-album-label">${esc(t.artist || artistName)}</div>
+          </div>
+          <span class="track-dur">${fmtDur(t.duration)}</span>
+          <button class="track-dl-btn" title="Download track"
+                  data-id="${esc(t.id)}" data-title="${esc(t.title)}"
+                  data-album="${esc(album.title)}" data-year="${esc(album.year || '')}"
+                  onclick="downloadTrack(this)">↓</button>
+        </div>`).join('');
+    } catch (_) {
+      document.getElementById('album-track-list').innerHTML =
+        '<div class="empty">Could not load tracks.</div>';
+    }
+  }
+
+  // ── Albums / discography ─────────────────────────────────────────────
+
+  async function loadAlbums(artistId) {
+    try {
+      const albums = await api('GET', `/artists/${artistId}/albums`);
+      currentAlbums = albums;
+      const done   = albums.filter(a => a.status === 'complete').length;
+      const wanted = albums.filter(a => a.wanted).length;
+      document.getElementById('albums-count').textContent =
+        `DISCOGRAPHY · ${done}/${albums.length} complete · ${wanted} wanted`;
+      const entry = allArtists.find(a => a.id === artistId);
+      if (entry) { entry.album_total = albums.length; entry.album_done = done; renderArtistList(); }
+      renderAlbumGrid();
+    } catch (_) {
+      document.getElementById('album-grid').innerHTML = '<div class="empty">Failed to load albums.</div>';
+    }
+  }
+
+  function renderAlbumGrid() {
+    const grid = document.getElementById('album-grid');
+    const filtered = currentDiscFilter === 'all'
+      ? currentAlbums
+      : currentAlbums.filter(a => (a.record_type || 'album') === currentDiscFilter);
+
+    if (!filtered.length) { grid.innerHTML = '<div class="empty">No albums in this category.</div>'; return; }
+
+    const q = (document.getElementById('discSearch')?.value || '').toLowerCase();
+    const visible = q ? filtered.filter(a => a.title.toLowerCase().includes(q)) : filtered;
+    grid.innerHTML = visible.map(al => {
+      const cover = al.cover_url
+        ? `<img src="${esc(al.cover_url)}" alt="${esc(al.title)} cover" loading="lazy">`
+        : '♪';
+      const dlBtn = al.status !== 'complete'
+        ? `<button class="overlay-btn" onclick="event.stopPropagation();downloadAlbumNow(${al.id})"
+                   aria-label="Download ${esc(al.title)}">Download</button>`
+        : '';
+      const badge = `<span class="badge badge-${esc(al.status)}">${esc(al.status)}</span>`;
+      return `
+        <div class="album-card" role="button" tabindex="0"
+             onclick="openAlbum(${al.id})"
+             onkeydown="if(event.key==='Enter'||event.key===' ')openAlbum(${al.id})"
+             aria-label="View tracks: ${esc(al.title)}">
+          <div class="album-cover">
+            ${cover}
+            <div class="album-overlay">
+              ${dlBtn}${retryBtn}
+            </div>
+          </div>
+          <div class="album-body">
+            <div class="title">${esc(al.title)}</div>
+            <div class="year">${esc(al.year || '—')}</div>
+            ${badge}${trackLine}
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function filterDisc(type) {
+    currentDiscFilter = type;
+    setDiscTab(type);
+    renderAlbumGrid();
+  }
+
+  function setDiscTab(type) {
+    document.querySelectorAll('.disc-tab').forEach(btn => {
+      const active = btn.textContent.toLowerCase().replace(/s$/, '') === type || (type === 'all' && btn.textContent === 'All');
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-selected', String(active));
+    });
+  }
+
+  // ── Wanted ───────────────────────────────────────────────────────────
+
+  async function ignoreAll() {
+    if (!selectedArtist) return;
+    await api('PATCH', `/artists/${selectedArtist.id}/albums/wanted?wanted=false`);
+    await loadAlbums(selectedArtist.id);
+  }
+
+  async function confirmDiscography() {
+    if (!selectedArtist) return;
+    const total = currentAlbums.length;
+    if (!confirm(`Download all ${total} albums from ${selectedArtist.name}?\n\nThis will queue the full discography.`)) return;
+    await api('PATCH', `/artists/${selectedArtist.id}/albums/wanted?wanted=true`);
+    await api('POST', '/cycle/run');
+    await loadAlbums(selectedArtist.id);
+  }
+
+  async function downloadAlbumNow(albumId) {
+    const album = currentAlbums.find(a => a.id === albumId);
+    if (album) { album.status = 'downloading'; renderAlbumGrid(); }
+    try {
+      await api('POST', `/albums/${albumId}/retry`);
+    } catch (_) {
+      if (selectedArtist) await loadAlbums(selectedArtist.id);
+    }
+  }
+
+  // ── Related artists on artist page ───────────────────────────────────
+
+  async function loadRelated(artistId) {
+    const el = document.getElementById('row-related');
+    try {
+      const results = await api('GET', `/artists/${artistId}/related`);
+      if (!results.length) { el.innerHTML = '<div class="empty">No related artists found.</div>'; return; }
+      const known = new Set(allArtists.map(a => a.name.toLowerCase()));
+      el.innerHTML = results.map(a => makeArtistCard(a, known.has(a.name.toLowerCase()))).join('');
+    } catch (_) {
+      el.innerHTML = '<div class="empty">Could not load related artists.</div>';
+    }
+  }
+
+  // ── Home page ────────────────────────────────────────────────────────
+
+  async function loadHome() {
+    await Promise.all([loadRecent(), loadCharts(), loadSimilar()]);
+  }
+
+  async function loadRecent() {
+    try {
+      const items = await api('GET', '/recent');
+      if (!items.length) return;
+      document.getElementById('sec-recent').style.display = '';
+      const row = document.getElementById('row-recent');
+      row.innerHTML = items.map(a => makeAlbumCard(a, a.artist_id)).join('');
+    } catch (_) {}
+  }
+
+  async function loadCharts() {
+    try {
+      const { artists, releases } = await api('GET', '/charts');
+      const known = new Set(allArtists.map(a => a.name.toLowerCase()));
+      if (artists.length) {
+        document.getElementById('row-trending').innerHTML =
+          artists.map(a => makeArtistCard(a, known.has(a.name.toLowerCase()))).join('');
+      }
+      if (releases.length) {
+        document.getElementById('row-releases').innerHTML =
+          releases.map(a => makeAlbumCard(a, null)).join('');
+      }
+    } catch (_) {
+      document.getElementById('row-trending').innerHTML = '<div class="empty">Could not load charts.</div>';
+      document.getElementById('row-releases').innerHTML = '<div class="empty">Could not load releases.</div>';
+    }
+  }
+
+  async function loadSimilar() {
+    try {
+      const results = await api('GET', '/discover');
+      const known = new Set(allArtists.map(a => a.name.toLowerCase()));
+      if (!results.length) {
+        document.getElementById('row-similar').innerHTML = '<div class="empty">Add artists to get recommendations.</div>';
+        return;
+      }
+      document.getElementById('row-similar').innerHTML =
+        results.map(a => makeArtistCard(a, known.has(a.name.toLowerCase()))).join('');
+    } catch (_) {}
+  }
+
+  // ── Card builders ────────────────────────────────────────────────────
+
+  function makeArtistCard(artist, inLibrary) {
+    const initials = artist.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+    const avatar = artist.image_url
+      ? `<img src="${esc(artist.image_url)}" alt="" loading="lazy">`
+      : initials;
+    const tag = inLibrary
+      ? `<span class="h-artist-tag tag-library">IN LIBRARY</span>`
+      : `<span class="h-artist-tag tag-add">+ Add</span>`;
+    return `
+      <div class="h-artist-card" data-name="${esc(artist.name)}" data-in-lib="${inLibrary}"
+           role="button" tabindex="0"
+           onclick="onArtistCardClick(this)"
+           onkeydown="if(event.key==='Enter'||event.key===' ')onArtistCardClick(this)">
+        <div class="h-artist-avatar">${avatar}</div>
+        <div class="h-artist-name">${esc(artist.name)}</div>
+        ${tag}
+      </div>`;
+  }
+
+  async function onArtistCardClick(card) {
+    const name = card.dataset.name;
+    if (card.dataset.inLib === 'true') {
+      selectArtistByName(name);
+    } else {
+      card.style.opacity = '0.5';
+      card.style.pointerEvents = 'none';
+      await addArtistByName(name);
+      card.dataset.inLib = 'true';
+      card.querySelector('.h-artist-tag').textContent = 'IN LIBRARY';
+      card.querySelector('.h-artist-tag').className = 'h-artist-tag tag-library';
+      card.style.opacity = '';
+      card.style.pointerEvents = '';
+      selectArtistByName(name);
+    }
+  }
+
+  function makeAlbumCard(item, artistId = null) {
+    const cover = item.cover_url
+      ? `<img src="${esc(item.cover_url)}" alt="" loading="lazy">`
+      : '♪';
+    const onclick = artistId !== null ? `onclick="selectArtist(${Number(artistId)})"` : '';
+    return `
+      <div class="h-album-card" ${onclick}>
+        <div class="h-album-cover">${cover}</div>
+        <div class="h-album-info">
+          <div class="h-album-title">${esc(item.title)}</div>
+          <div class="h-album-artist">${esc(item.artist || item.year || '')}</div>
+        </div>
+      </div>`;
+  }
+
+  // ── Global search ────────────────────────────────────────────────────
+
+  function onGlobalSearch() {
+    clearTimeout(searchTimer);
+    const q = document.getElementById('global-search').value.trim();
+    const drop = document.getElementById('search-drop');
+    if (!q) { drop.classList.add('hidden'); return; }
+    drop.classList.remove('hidden');
+    drop.innerHTML = '<div class="drop-section">Searching…</div>';
+    searchTimer = setTimeout(() => runSearch(q), 280);
+  }
+
+  async function runSearch(q) {
+    const drop = document.getElementById('search-drop');
+    try {
+      const results = await api('GET', `/search/artists?q=${encodeURIComponent(q)}`);
+      if (!results.length) { drop.innerHTML = '<div class="drop-section">No results.</div>'; return; }
+      const known = new Set(allArtists.map(a => a.name.toLowerCase()));
+      drop.innerHTML = '<div class="drop-section">Artists</div>' +
+        results.map(a => {
+          const initials = a.name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+          const thumb = a.image_url
+            ? `<img src="${esc(a.image_url)}" alt="" loading="lazy">`
+            : initials;
+          const inLib = known.has(a.name.toLowerCase());
+          const badge = inLib ? `<span class="drop-badge">IN LIBRARY</span>` : '';
+          return `
+            <div class="drop-row" role="option" data-name="${esc(a.name)}" data-in-lib="${inLib}"
+                 onclick="onDropRowClick(this)">
+              <div class="drop-thumb round">${thumb}</div>
+              <div class="drop-meta">
+                <div class="drop-name">${esc(a.name)}</div>
+                <div class="drop-sub">Artist</div>
+              </div>
+              ${badge}
+            </div>`;
+        }).join('');
+    } catch (_) {
+      drop.innerHTML = '<div class="drop-section">Search failed.</div>';
+    }
+  }
+
+  async function onDropRowClick(row) {
+    const name = row.dataset.name;
+    const inLib = row.dataset.inLib === 'true';
+    document.getElementById('search-drop').classList.add('hidden');
+    document.getElementById('global-search').value = '';
+    if (inLib) {
+      selectArtistByName(name);
+    } else {
+      await addArtistByName(name);
+      selectArtistByName(name);
+    }
+  }
+
+  // ── Artist actions ───────────────────────────────────────────────────
+
+  async function addArtistByName(name) {
+    try {
+      await api('POST', '/artists', { name });
+      await loadArtists();
+      await loadStats();
+      homeLoaded = false; // refresh recommendations next time
+    } catch (e) { alert('Could not add artist: ' + e.message); }
+  }
+
+  function selectArtistByName(name) {
+    const artist = allArtists.find(a => a.name.toLowerCase() === name.toLowerCase());
+    if (artist) selectArtist(artist.id);
+  }
+
+  async function submitAddArtist() {
+    const name = document.getElementById('input-artist-name').value.trim();
+    if (!name) return;
+    closeModal('modal-add-artist');
+    await addArtistByName(name);
+    selectArtistByName(name);
+  }
+
+  async function submitAddAlbum() {
+    const title = document.getElementById('input-album-title').value.trim();
+    const year  = document.getElementById('input-album-year').value.trim();
+    if (!title || !selectedArtist) return;
+    closeModal('modal-add-album');
+    try {
+      await api('POST', `/artists/${selectedArtist.id}/albums`, { title, year });
+      await loadAlbums(selectedArtist.id);
+      await loadAlbumCount(selectedArtist.id);
+      await loadStats();
+    } catch (e) { alert('Could not add album: ' + e.message); }
+  }
+
+  async function removeArtistSelected() {
+    if (!selectedArtist) return;
+    if (!confirm(`Remove "${selectedArtist.name}" and all their albums?`)) return;
+    await api('DELETE', `/artists/${selectedArtist.id}`);
+    showHome();
+    await loadArtists();
+    await loadStats();
+  }
+
+  async function toggleMonitorSelected() {
+    if (!selectedArtist) return;
+    await toggleMonitor(selectedArtist.id, selectedArtist.monitored);
+  }
+
+  async function toggleMonitor(id, current) {
+    await api('PATCH', `/artists/${id}/monitor?monitored=${!current}`);
+    const artist = allArtists.find(a => a.id === id);
+    if (artist) artist.monitored = !current;
+    if (selectedArtist && selectedArtist.id === id) {
+      selectedArtist.monitored = !current;
+      document.getElementById('btn-monitor').textContent = selectedArtist.monitored ? 'Pause' : 'Resume';
+    }
+    renderArtistList();
+  }
+
+  async function resyncArtist() {
+    if (!selectedArtist) return;
+    const btn = document.getElementById('btn-resync');
+    btn.textContent = 'Queued'; btn.disabled = true;
+    try {
+      await api('POST', `/artists/${selectedArtist.id}/sync`);
+    } catch (_) {}
+    setTimeout(() => { btn.textContent = 'Resync'; btn.disabled = false; }, 2000);
+  }
+
+
+  // ── Cycle / Logs ─────────────────────────────────────────────────────
+
+  async function triggerCycle() {
+    await api('POST', '/cycle/run');
+    const pill = document.getElementById('cycle-pill');
+    pill.textContent = 'Running…'; pill.className = 'running';
+  }
+
+  function toggleLogs() {
+    logsCollapsed = !logsCollapsed;
+    document.getElementById('log-body').classList.toggle('collapsed', logsCollapsed);
+    document.getElementById('log-toggle').textContent = logsCollapsed ? '▼' : '▲';
+    document.getElementById('log-drawer-header').setAttribute('aria-expanded', String(!logsCollapsed));
+  }
+
+  async function loadLogs() {
+    try {
+      const logs = await api('GET', '/logs?limit=100');
+      const el = document.getElementById('log-body');
+      if (!logs.length) { el.innerHTML = '<div class="empty">No logs yet.</div>'; return; }
+      el.innerHTML = logs.map(l => `
+        <div class="log-entry">
+          <span class="log-time">${esc(l.at.slice(11,19))}</span>
+          <span class="log-${esc(l.level)}">${esc(l.message)}</span>
+        </div>`).join('');
+    } catch (_) {}
+  }
+
+  // ── Refresh loop ─────────────────────────────────────────────────────
+
+  async function refresh() {
+    await Promise.all([loadStats(), loadLogs()]);
+    if (selectedArtist) await loadAlbums(selectedArtist.id);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+      if (document.getElementById('sidebar').classList.contains('open')) { closeSidebar(); return; }
+      document.querySelectorAll('.modal-backdrop:not(.hidden)').forEach(m => m.classList.add('hidden'));
+    }
+  });
+
+  (async () => {
+    await Promise.all([loadStats(), loadArtists(), loadLogs()]);
+    showHome();
+    setInterval(refresh, 10000);
+  })();
+</script>
+</body>
+</html>
