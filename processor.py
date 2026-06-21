@@ -708,6 +708,7 @@ async def scan_existing_library() -> dict:
                     ambiguous.append({
                         'artist_name': artist_name,
                         'subdir': subdir,
+                        'tag': subdir_tags.get(subdir),  # tier-1 ground truth, if any
                         'actual_tracks': actual_tracks,
                         'candidates': [
                             {
