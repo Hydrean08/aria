@@ -605,11 +605,11 @@ async def scan_existing_library() -> dict:
 
             claimed_subdirs.add(subdir)
             claimed_album_ids.add(album_id)
-            expected = next(
-                (tc for aid, _t, _tn, tc in artist_albums if aid == album_id),
-                0,
+            expected, current_status = next(
+                ((tc, st) for aid, _t, _tn, tc, st in artist_albums if aid == album_id),
+                (0, 'missing'),
             )
-            _classify(album_id, expected, actual_tracks)
+            _classify(album_id, expected, actual_tracks, current_status)
 
         # Folders that scored against nothing are unmatched.
         for subdir in subdirs:
