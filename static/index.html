@@ -519,6 +519,120 @@
 
       .section-title { font-size: 16px; }
     }
+
+    /* ── AI surfaces (Suggestions / Releases / Playlists / Digest) ── */
+    .ai-digest {
+      padding: 12px 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 8px;
+      line-height: 1.5;
+      color: var(--text);
+      font-size: 14px;
+    }
+    .ai-sugg-card, .ai-release-card {
+      display: flex; flex-direction: column;
+      gap: 6px;
+      padding: 12px;
+      min-height: 150px;
+    }
+    .ai-sugg-name, .ai-release-title {
+      font-weight: 700;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .ai-release-artist {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .ai-sugg-reason, .ai-release-reason {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      flex: 1;
+    }
+    .ai-sugg-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+      flex-wrap: wrap;
+    }
+    .muted-tag {
+      font-size: 11px;
+      color: var(--muted);
+      padding: 4px 8px;
+      background: var(--card, var(--surface));
+      border-radius: 4px;
+    }
+    .ai-playlist-row {
+      display: block;
+      padding: 12px 14px;
+      margin-bottom: 8px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .ai-playlist-row:hover {
+      background: var(--card, var(--surface));
+      border-color: var(--accent);
+    }
+    .ai-playlist-name {
+      font-weight: 700;
+      font-size: 15px;
+      color: var(--text);
+    }
+    .ai-playlist-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .ai-playlist-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+      opacity: 0.7;
+    }
+    .ai-track-list, .lyric-results {
+      max-height: 60vh;
+      overflow-y: auto;
+      margin-top: 12px;
+    }
+    .ai-track {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 8px 4px;
+      border-bottom: 1px solid var(--border);
+      font-size: 13px;
+    }
+    .ai-track > div:first-child {
+      display: flex;
+      gap: 6px;
+      align-items: baseline;
+    }
+    .ai-track-n {
+      color: var(--muted);
+      width: 28px;
+      flex-shrink: 0;
+    }
+    .ai-track-artist { color: var(--text); font-weight: 600; }
+    .ai-track-sep { color: var(--muted); }
+    .ai-track-title { color: var(--text); }
+    .ai-track-reason {
+      font-size: 11px;
+      color: var(--muted);
+      padding-left: 6px;
+      font-style: italic;
+    }
+    .modal-sub {
+      font-size: 13px;
+      color: var(--muted);
+      margin-top: -4px;
+      margin-bottom: 12px;
+    }
   </style>
 </head>
 <body>
