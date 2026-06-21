@@ -394,17 +394,73 @@ async def retry_album(album_id: int):
         await plex.scan_music_library()
 
 
+def _read_album_tag(folder_path: str) -> str | None:
+    """Read the album tag from the first decodable audio file in a folder.
+    Returns the tag string or None if unreadable. This is GROUND TRUTH —
+    the file itself declaring what album it belongs to, more reliable than
+    matching folder names against DB titles. Used as the primary matcher
+    so e.g. Switchfoot's `The Beautiful Letdown` folder gets identified as
+    the 2003 original (per its TALB tag) rather than being force-matched
+    to a 2023 variant the DB happens to know about."""
+    try:
+        import mutagen
+    except ImportError:
+        return None
+    try:
+        for name in sorted(os.listdir(folder_path)):
+            full = os.path.join(folder_path, name)
+            if not os.path.isfile(full):
+                continue
+            if not name.lower().endswith(('.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus')):
+                continue
+            try:
+                meta = mutagen.File(full)
+            except Exception:
+                continue
+            if meta is None:
+                continue
+            # Tag key varies by format: ID3=TALB, Vorbis=ALBUM/album,
+            # MP4=©alb. mutagen exposes lowercase 'album' for FLAC/Vorbis.
+            for key in ('TALB', 'album', 'ALBUM', '\xa9alb'):
+                val = meta.get(key) if key in meta else None
+                if val is None:
+                    continue
+                # Some backends return a Frame, some a list, some a str.
+                if hasattr(val, 'text') and val.text:
+                    return str(val.text[0]).strip() or None
+                if isinstance(val, (list, tuple)) and val:
+                    return str(val[0]).strip() or None
+                if isinstance(val, str):
+                    return val.strip() or None
+            # First decodable file checked but no album tag — give up
+            # rather than scanning the whole folder. If track 1 isn't
+            # tagged, the album probably isn't reliably tagged.
+            return None
+    except OSError:
+        return None
+    return None
+
+
 async def scan_existing_library() -> dict:
     """Walk MUSIC_DIR, match {Artist}/{Album}/ folders against the albums
-    table, and mark matches as 'complete' so users with a pre-existing
-    library aren't shown 0/N when they actually have content on disk.
+    table, and mark matches as 'complete' or 'partial' so users with a
+    pre-existing library aren't shown 0/N.
 
-    Only ever flips albums FROM 'missing' to 'complete' — never overwrites
-    a 'partial', 'failed', or already-complete record (those represent real
-    Aria-managed state). Idempotent — safe to re-run.
+    Three-tier matcher:
+      1. Tag-based: read the audio file's TALB/album tag (ground truth).
+         If it matches a DB row, commit — no ambiguity possible.
+      2. Filename-based: score folder name vs DB titles using the existing
+         exact-or-near matcher. Score >= CONFIDENT_SCORE commits directly.
+      3. AI tiebreaker: when filename matches are ambiguous or below the
+         confidence threshold, ask GLM-4 with an explicit abstain option.
+         Picks below confidence + AI abstaining = unmatched (no DB write).
 
-    Returns {'scanned_artists', 'matched_albums', 'unmatched_dirs'} for the
-    caller to surface.
+    Only ever flips rows FROM 'missing'. Existing complete/partial rows
+    participate in matching to absorb their folder claim but their state
+    is preserved (so source attribution like 'ytmusic' isn't lost).
+
+    Returns counts of each tier so the caller can show "matched 18 (12 by
+    tag, 4 by name, 2 by AI), 3 unmatched."
     """
     if not os.path.isdir(MUSIC_DIR):
         return {'scanned_artists': 0, 'matched_albums': 0, 'unmatched_dirs': 0,
