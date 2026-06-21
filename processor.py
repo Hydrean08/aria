@@ -599,11 +599,17 @@ async def scan_existing_library() -> dict:
         if not artist_albums:
             continue
 
-        # Phase 1: score every folder against every unclaimed album, then
-        # resolve greedily highest-score-first. This is O(N*M) per artist
-        # but N and M are small (dozens, not thousands).
+        # Phase 1: per-folder pass. For each folder:
+        #   - Count audio files (skip if zero).
+        #   - TIER 1: read the file's album tag (ground truth) and try to
+        #     match it exactly against a DB title. On hit, commit immediately
+        #     and exclude this folder + album from name-score matching.
+        #   - TIER 2 fallback: score folder name vs every unclaimed DB title.
+        #     Resolved greedily by score after the pass.
+        # O(N*M) per artist but N and M are dozens, not thousands.
         candidates: list[tuple[int, str, int, int]] = []  # (score, subdir, album_id, expected)
         subdir_info: dict[str, int] = {}  # subdir -> actual_tracks
+        tag_resolved_subdirs: set[str] = set()
         for subdir in subdirs:
             full = os.path.join(artist_dir, subdir)
             try:
@@ -617,8 +623,34 @@ async def scan_existing_library() -> dict:
             if actual_tracks == 0:
                 continue  # empty folders can't be matches
             subdir_info[subdir] = actual_tracks
+
+            # TIER 1: tag-based ground-truth match. If the audio file says
+            # "this is album X" and X exactly matches a DB row, that's the
+            # answer. Stops the entire class of folder-name-vs-DB-variant
+            # ambiguity (Switchfoot's `The Beautiful Letdown` folder being
+            # matched against "Our Version [Deluxe Edition]" etc.).
+            tag = _read_album_tag(full)
+            if tag:
+                tag_norm = _norm(tag)
+                tag_match = None
+                for album_id, title, title_norm, track_count, status in artist_albums:
+                    if title_norm == tag_norm and album_id not in claimed_album_ids:
+                        tag_match = (album_id, track_count, status)
+                        break
+                if tag_match is not None:
+                    album_id, expected, current_status = tag_match
+                    claimed_album_ids.add(album_id)
+                    tag_resolved_subdirs.add(subdir)
+                    _classify(album_id, expected, actual_tracks, current_status)
+                    continue  # don't fall through to name-scoring
+
+            # TIER 2 setup: score this folder's name against every album
+            # whose tag didn't already win it. Resolution happens after the
+            # full pass below (highest-score-first, AI tiebreaker for ties).
             subdir_norm = _norm(subdir)
             for album_id, title, title_norm, track_count, _status in artist_albums:
+                if album_id in claimed_album_ids:
+                    continue  # tag-resolved or claimed by a prior folder
                 s = _score(subdir_norm, title_norm)
                 if s > 0:
                     candidates.append((s, subdir, album_id, track_count))
