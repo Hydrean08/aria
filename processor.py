@@ -635,11 +635,11 @@ async def scan_existing_library() -> dict:
             # matched against "Our Version [Deluxe Edition]" etc.).
             tag = _read_album_tag(full)
             if tag:
-                # Stash for the AI tiebreaker pass below — when tier 2/3
-                # has to fall back, the tag is more authoritative than the
-                # folder name for asking AI "is this the same release?".
+                # Stash the tag — even if it doesn't exact-match below, the
+                # AI tiebreaker pass uses it instead of the folder name as
+                # the disk-side identifier (ground truth from the file
+                # itself beats a possibly-mangled folder name).
                 subdir_tags[subdir] = tag
-            if tag:
                 tag_norm = _norm(tag)
                 tag_match = None
                 for album_id, title, title_norm, track_count, status in artist_albums:
