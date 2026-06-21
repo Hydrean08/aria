@@ -797,6 +797,29 @@ async def scan_existing_library() -> dict:
                     # AI abstained or call failed — skip rather than guess wrong.
                     continue
                 picked_id = free[pick_idx]['album_id']
+                # Belt-and-suspenders sanity check: GLM-4 sometimes ignores
+                # the abstain instruction and picks the "closest" variant
+                # even when none match (e.g. matching '...(Live from LA)'
+                # against a 2003 studio original folder). Verify that the
+                # disk-side title (tag preferred, subdir fallback) at least
+                # contains the picked DB title's core — if the DB title has
+                # a parenthetical qualifier ("Live", "Deluxe", "Our Version")
+                # the disk title must too, otherwise we treat this as an
+                # ignored-abstain and skip.
+                picked_title = next(
+                    (c['title'] for c in free if c['album_id'] == picked_id),
+                    '',
+                )
+                disk_norm = _norm(disk_title)
+                pick_norm = _norm(picked_title)
+                if pick_norm and not (
+                    disk_norm == pick_norm
+                    or (disk_norm.startswith(pick_norm) and len(disk_norm) - len(pick_norm) <= 3)
+                    or (pick_norm.startswith(disk_norm) and len(pick_norm) - len(disk_norm) <= 3)
+                ):
+                    # AI picked a variant the disk title doesn't claim to be.
+                    # Skip rather than mark the wrong album complete.
+                    continue
 
                 claimed_album_ids.add(picked_id)
                 actual_tracks = amb['actual_tracks']
