@@ -3,19 +3,41 @@ import os
 import shutil
 import subprocess
 
+import httpx
+
 import db
 from tagger import safe_name, fix_album_artist, enrich_file
 from sources import acoustid_lookup, deezer, discogs, musicbrainz, plex, soulseek, spotiflac, spotify, ytmusic
 
+
+async def send_push(title: str, body: str) -> None:
+    """Best-effort push to all registered Expo tokens. Never raises."""
+    try:
+        async with db.connect() as conn:
+            rows = await (await conn.execute('SELECT token FROM push_tokens')).fetchall()
+        tokens = [r[0] for r in rows]
+        if not tokens:
+            return
+        messages = [{'to': t, 'title': title, 'body': body} for t in tokens]
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                'https://exp.host/--/api/v2/push/send',
+                json=messages,
+                headers={'Content-Type': 'application/json'},
+            )
+    except Exception:
+        pass
+
 MUSIC_DIR     = os.getenv('MUSIC_DIR', '/music')
 DOWNLOADS_DIR = os.getenv('DOWNLOADS_DIR', '/downloads')
+MAX_ALBUM_RETRIES = 5
 
 
 def _dest_dir(artist: str, album: str) -> str:
     return os.path.join(MUSIC_DIR, safe_name(artist), safe_name(album))
 
 
-def _validate_files(files: list[str]) -> bool:
+def _validate_files_sync(files: list[str]) -> bool:
     """Decode-test the first file to catch Blowfish decryption failures."""
     if not files:
         return False
@@ -27,7 +49,12 @@ def _validate_files(files: list[str]) -> bool:
     return not bad
 
 
-def _cleanup_files(files: list[str]):
+async def _validate_files(files: list[str]) -> bool:
+    """Async wrapper — runs the blocking ffmpeg check in a thread."""
+    return await asyncio.to_thread(_validate_files_sync, files)
+
+
+def _cleanup_files_sync(files: list[str]) -> None:
     """Remove files from a failed download attempt and prune empty dirs."""
     for f in files:
         try:
@@ -39,6 +66,11 @@ def _cleanup_files(files: list[str]):
             os.rmdir(d)
         except OSError:
             pass
+
+
+async def _cleanup_files(files: list[str]) -> None:
+    """Async wrapper — runs blocking file removal in a thread."""
+    await asyncio.to_thread(_cleanup_files_sync, files)
 
 
 async def _update_album(album_id: int, **kwargs):
@@ -180,7 +212,7 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
     await db.log('info', f'Synced {len(to_insert)} albums for {artist_name} ({sp_matched} on Spotify, {dz_matched} on Deezer)')
 
 
-def _collect_audio(artist: str, album: str) -> list[str]:
+def _collect_audio_sync(artist: str, album: str) -> list[str]:
     found = []
     exts = {'.mp3', '.flac', '.m4a', '.ogg', '.opus'}
     artist_l = artist.lower()
@@ -195,7 +227,12 @@ def _collect_audio(artist: str, album: str) -> list[str]:
     return sorted(found)
 
 
-def _move_to_library(files: list[str], artist: str, album: str) -> list[str]:
+async def _collect_audio(artist: str, album: str) -> list[str]:
+    """Async wrapper — os.walk on a network/FUSE mount can block."""
+    return await asyncio.to_thread(_collect_audio_sync, artist, album)
+
+
+def _move_to_library_sync(files: list[str], artist: str, album: str) -> list[str]:
     dest = _dest_dir(artist, album)
     os.makedirs(dest, exist_ok=True)
     moved = []
@@ -209,6 +246,11 @@ def _move_to_library(files: list[str], artist: str, album: str) -> list[str]:
         fix_album_artist(dst, artist)
         moved.append(dst)
     return moved
+
+
+async def _move_to_library(files: list[str], artist: str, album: str) -> list[str]:
+    """Async wrapper — shutil.move and fix_album_artist both do blocking I/O."""
+    return await asyncio.to_thread(_move_to_library_sync, files, artist, album)
 
 
 async def _process_album(album_id: int, artist_name: str, album_title: str,
@@ -237,19 +279,19 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
     # 1. SpotiFLAC via Spotify URL (tries Tidal/Qobuz/Amazon/Apple/Deezer internally)
     if spotify_id:
         files = await spotiflac.download_album_spotify(spotify_id, dest)
-        if files and _validate_files(files):
+        if files and await _validate_files(files):
             source = 'spotiflac'
         else:
-            _cleanup_files(files)
+            await _cleanup_files(files)
             files = []
 
     # 2. SpotiFLAC via Deezer URL
     if not files and deezer_id:
         files = await spotiflac.download_album(deezer_id, dest)
-        if files and _validate_files(files):
+        if files and await _validate_files(files):
             source = 'spotiflac'
         else:
-            _cleanup_files(files)
+            await _cleanup_files(files)
             files = []
 
     # 3. Soulseek
@@ -258,12 +300,13 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
         if result:
             queued = await soulseek.queue_download(result, artist_name, album_title)
             if queued:
-                await soulseek.wait_for_downloads(queued, timeout=600)
-                files = _move_to_library(_collect_audio(artist_name, album_title), artist_name, album_title)
-                if files and _validate_files(files):
+                await soulseek.wait_for_downloads(queued, timeout=150)
+                collected = await _collect_audio(artist_name, album_title)
+                files = await _move_to_library(collected, artist_name, album_title)
+                if files and await _validate_files(files):
                     source = 'soulseek'
                 else:
-                    _cleanup_files(files)
+                    await _cleanup_files(files)
                     files = []
 
     # 4. YouTube Music (no account — ~128kbps m4a, broad catalog)
@@ -271,16 +314,28 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
         browse_id = await ytmusic.search_album(artist_name, album_title)
         if browse_id:
             files = await ytmusic.download_album(browse_id, dest, artist_name, album_title)
-            if files and _validate_files(files):
+            if files and await _validate_files(files):
                 source = 'ytmusic'
             else:
-                _cleanup_files(files)
+                await _cleanup_files(files)
                 files = []
 
     if not files:
-        await _update_album(album_id, status='missing',
-                            error='Not found on SpotiFLAC, Soulseek, or YouTube Music')
-        await db.log('warn', f'No source found: {artist_name} — {album_title}')
+        async with db.connect() as conn:
+            row = await (await conn.execute(
+                'SELECT retry_count FROM albums WHERE id = ?', (album_id,)
+            )).fetchone()
+        new_count = (row[0] if row else 0) + 1
+        if new_count >= MAX_ALBUM_RETRIES:
+            await _update_album(album_id, status='error', retry_count=new_count,
+                                error=f'Not found after {new_count} attempts')
+            await db.log('warn', f'Giving up after {new_count} attempts: {artist_name} — {album_title}')
+            asyncio.create_task(send_push('❌ Download failed', f'{artist_name} — {album_title} (gave up after {new_count} tries)'))
+        else:
+            await _update_album(album_id, status='missing', retry_count=new_count,
+                                error='Not found on SpotiFLAC, Soulseek, or YouTube Music')
+            await db.log('warn', f'No source found (attempt {new_count}/{MAX_ALBUM_RETRIES}): {artist_name} — {album_title}')
+            asyncio.create_task(send_push('❌ Download failed', f'{artist_name} — {album_title}'))
         return False
 
     await _enrich(files, artist_name, album_title, source)
@@ -292,6 +347,7 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
         updates['track_count'] = actual
     await _update_album(album_id, **updates)
     await db.log('info', f'Done: {artist_name} — {album_title} ({len(files)} tracks via {source})')
+    asyncio.create_task(send_push('🎵 Downloaded', f'{artist_name} — {album_title}'))
     return True
 
 
@@ -314,6 +370,9 @@ async def _enrich(files: list[str], artist: str, album: str, source: str):
         )
 
 
+_download_sem = asyncio.Semaphore(3)
+
+
 async def retry_album(album_id: int):
     async with db.connect() as conn:
         row = await (await conn.execute('''
@@ -321,9 +380,15 @@ async def retry_album(album_id: int):
             FROM albums al JOIN artists ar ON ar.id = al.artist_id
             WHERE al.id = ?
         ''', (album_id,))).fetchone()
+        if row:
+            await conn.execute(
+                "UPDATE albums SET retry_count = 0, status = 'missing' WHERE id = ?", (album_id,)
+            )
+            await conn.commit()
     if not row:
         return
-    downloaded = await _process_album(album_id, row[0], row[1], row[2], row[3], row[4], row[5])
+    async with _download_sem:
+        downloaded = await _process_album(album_id, row[0], row[1], row[2], row[3], row[4], row[5])
     if downloaded:
         await plex.scan_music_library()
 
@@ -340,11 +405,28 @@ async def run_cycle():
             ORDER BY ar.name, al.year
         ''')).fetchall()
 
-    any_downloaded = False
-    for row in rows:
-        if await _process_album(row[0], row[1], row[2], row[3], row[4], row[5], row[6]):
-            any_downloaded = True
+    async def _bounded(row):
+        async with _download_sem:
+            return await _process_album(row[0], row[1], row[2], row[3], row[4], row[5], row[6])
 
-    if any_downloaded:
+    # return_exceptions=True so one bad album (Deezer 5xx, tag failure,
+    # filesystem hiccup) doesn't abort the whole gather and leave every later
+    # album waiting until the next cycle. Each failure becomes a logged
+    # warning; the cycle still finishes and scans Plex for whatever succeeded.
+    download_results = await asyncio.gather(
+        *[_bounded(row) for row in rows], return_exceptions=True
+    )
+    succeeded = []
+    for row, result in zip(rows, download_results):
+        if isinstance(result, BaseException):
+            await db.log(
+                'warn',
+                f'Album sync failed for {row[1]} — {row[2]}: '
+                f'{type(result).__name__}: {result!r}',
+            )
+        else:
+            succeeded.append(result)
+
+    if any(succeeded):
         await plex.scan_music_library()
     await db.log('info', 'Cycle complete')
