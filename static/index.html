@@ -601,6 +601,42 @@
         <div class="scroll-row" id="row-similar"><div class="loading">Loading…</div></div>
       </div>
 
+      <!-- ── AI Sections (GLM-4 powered) ───────────────────── -->
+      <div class="section-block" id="sec-ai-digest" style="display:none">
+        <div class="section-head">
+          <span class="section-title">Library Digest</span>
+          <span class="section-sub">AI overview · <a href="#" onclick="loadDigest(true);return false">refresh</a></span>
+        </div>
+        <div id="ai-digest-body" class="ai-digest"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">AI Suggestions</span>
+          <span class="section-sub">Artists you'd likely enjoy</span>
+        </div>
+        <div class="scroll-row" id="row-ai-suggestions"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">New Releases You'd Like</span>
+          <span class="section-sub">From your monitored artists · <a href="#" onclick="refreshReleases();return false">refresh</a></span>
+        </div>
+        <div class="scroll-row" id="row-ai-releases"><div class="loading">Loading…</div></div>
+      </div>
+
+      <div class="section-block">
+        <div class="section-head">
+          <span class="section-title">AI Playlists</span>
+          <span class="section-sub">
+            <button class="ghost sm" onclick="openModal('modal-mood-playlist')">+ Mood playlist</button>
+            <button class="ghost sm" onclick="openModal('modal-lyric-search')">Find by description</button>
+          </span>
+        </div>
+        <div id="ai-playlists-list"><div class="loading">Loading…</div></div>
+      </div>
+
     </div>
 
     <!-- ── Artist view ───────────────────────────────────── -->
