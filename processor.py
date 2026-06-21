@@ -643,7 +643,6 @@ async def scan_existing_library() -> dict:
                 if tag_match is not None:
                     album_id, expected, current_status = tag_match
                     claimed_album_ids.add(album_id)
-                    tag_resolved_subdirs.add(subdir)
                     _classify(album_id, expected, actual_tracks, current_status)
                     continue  # don't fall through to name-scoring
 
