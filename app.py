@@ -19,6 +19,7 @@ def _fmt_exc(e: BaseException) -> str:
 # stalls (e.g. scheduler wedged on a hung await).
 _last_cycle_end: float | None = None
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
