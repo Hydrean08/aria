@@ -58,6 +58,26 @@ async def _migrate(conn):
         'ALTER TABLE albums ADD COLUMN wanted INTEGER NOT NULL DEFAULT 1',
         'ALTER TABLE albums ADD COLUMN record_type TEXT NOT NULL DEFAULT \'album\'',
         'ALTER TABLE albums ADD COLUMN spotify_id TEXT',
+        '''CREATE TABLE IF NOT EXISTS suggestions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            artist_name   TEXT    NOT NULL,
+            reason        TEXT,
+            source_artist TEXT,
+            dismissed     INTEGER DEFAULT 0,
+            created_at    TEXT    DEFAULT (datetime('now'))
+        )''',
+        '''CREATE TABLE IF NOT EXISTS playlists (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT    NOT NULL,
+            description TEXT,
+            track_list  TEXT,
+            created_at  TEXT    DEFAULT (datetime('now'))
+        )''',
+        '''CREATE TABLE IF NOT EXISTS push_tokens (
+            token       TEXT PRIMARY KEY,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )''',
+        'ALTER TABLE albums ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0',
     ]:
         try:
             await conn.execute(sql)
@@ -69,6 +89,12 @@ async def _migrate(conn):
 @asynccontextmanager
 async def connect():
     async with aiosqlite.connect(DB_PATH) as conn:
+        # WAL lets readers and writers proceed without blocking each other —
+        # critical when the cycle is writing 100s of album updates while the
+        # web UI is reading via /api/items + /api/stats. busy_timeout makes
+        # waiters wait 5s instead of failing with SQLITE_BUSY.
+        await conn.execute('PRAGMA journal_mode=WAL')
+        await conn.execute('PRAGMA busy_timeout=5000')
         await conn.execute('PRAGMA foreign_keys = ON')
         yield conn
 
