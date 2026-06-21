@@ -748,21 +748,7 @@ async def scan_existing_library() -> dict:
                 album_id = top_picks[0]
             else:
                 # Multiple DB rows tied at the top — defer to AI.
-                lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}
-                ambiguous.append({
-                    'artist_name': artist_name,
-                    'subdir': subdir,
-                    'actual_tracks': actual_tracks,
-                    'candidates': [
-                        {
-                            'album_id': aid,
-                            'title':    lookup.get(aid, ('?', 0, 'missing'))[0],
-                            'expected': lookup.get(aid, ('?', 0, 'missing'))[1],
-                            'status':   lookup.get(aid, ('?', 0, 'missing'))[2],
-                        }
-                        for aid in top_picks
-                    ],
-                })
+                _record_ambiguity(subdir, top_picks, actual_tracks)
                 continue
 
             claimed_subdirs.add(subdir)
