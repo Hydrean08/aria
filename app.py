@@ -192,12 +192,14 @@ async def health():
     ok = True
     now = time.time()
 
-    # Cycle freshness — the single most important signal.
+    # Cycle freshness — the single most important signal. The 3x multiplier
+    # gives headroom for the natural cycle duration on top of the INTERVAL
+    # sleep; a tighter threshold false-flags healthy steady-state operation.
     if _last_cycle_end is None:
         checks['cycle'] = {'status': 'warming', 'age_seconds': None}
     else:
         age = now - _last_cycle_end
-        stale = age > (2 * INTERVAL)
+        stale = age > (3 * INTERVAL)
         checks['cycle'] = {
             'status': 'stale' if stale else 'ok',
             'age_seconds': round(age, 1),
