@@ -599,28 +599,11 @@ async def scan_existing_library() -> dict:
 
             claimed_subdirs.add(subdir)
             claimed_album_ids.add(album_id)
-
-            # Find expected track count for this assigned album.
             expected = next(
                 (tc for aid, _t, _tn, tc in artist_albums if aid == album_id),
                 0,
             )
-
-            # Classification rules — see commit message in PR for context.
-            #   actual >= expected (and expected > 0)  → complete
-            #   actual in [1, expected)                → partial
-            #   expected unknown (0) AND actual >= 8   → complete (assume
-            #     a full album when the folder looks substantial)
-            #   expected unknown (0) AND actual <  8   → partial (don't
-            #     guarantee completeness when we genuinely don't know)
-            if expected > 0 and actual_tracks >= expected:
-                complete_ids.append(album_id)
-            elif expected > 0:
-                partial_ids.append(album_id)
-            elif actual_tracks >= 8:
-                complete_ids.append(album_id)
-            else:
-                partial_ids.append(album_id)
+            _classify(album_id, expected, actual_tracks)
 
         # Folders that scored against nothing are unmatched.
         for subdir in subdirs:
