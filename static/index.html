@@ -1166,7 +1166,247 @@ async function loadStats() {
   // ── Home page ────────────────────────────────────────────────────────
 
   async function loadHome() {
-    await Promise.all([loadRecent(), loadCharts(), loadSimilar()]);
+    await Promise.all([
+      loadRecent(), loadCharts(), loadSimilar(),
+      loadDigest(false), loadAISuggestions(), loadAIReleases(), loadAIPlaylists(),
+    ]);
+  }
+
+  // ── AI surfaces (GLM-4 powered) ──────────────────────────────────────
+
+  async function loadDigest(forceFresh) {
+    const sec = document.getElementById('sec-ai-digest');
+    const body = document.getElementById('ai-digest-body');
+    try {
+      // Aggressive cache (digest costs an LLM call) — only refresh when asked.
+      const cached = !forceFresh && sessionStorage.getItem('aria.digest');
+      if (cached) {
+        sec.style.display = '';
+        body.textContent = cached;
+        return;
+      }
+      body.innerHTML = '<div class="loading">Asking AI…</div>';
+      sec.style.display = '';
+      const { digest, error } = await api('GET', '/ai-digest');
+      if (digest) {
+        body.textContent = digest;
+        sessionStorage.setItem('aria.digest', digest);
+      } else {
+        body.innerHTML = `<div class="empty">${error || 'Digest unavailable.'}</div>`;
+      }
+    } catch (_) {
+      body.innerHTML = '<div class="empty">Could not load digest.</div>';
+    }
+  }
+
+  async function loadAISuggestions() {
+    const row = document.getElementById('row-ai-suggestions');
+    try {
+      const sugg = await api('GET', '/ai-suggestions');
+      if (!sugg.length) {
+        row.innerHTML = '<div class="empty">No AI suggestions yet — they refresh weekly.</div>';
+        return;
+      }
+      const known = new Set(allArtists.map(a => a.name.toLowerCase()));
+      row.innerHTML = sugg.map(s => `
+        <div class="h-artist-card ai-sugg-card">
+          <div class="ai-sugg-name">${escapeHtml(s.artist_name)}</div>
+          <div class="ai-sugg-reason">${escapeHtml(s.reason)}</div>
+          <div class="ai-sugg-actions">
+            ${known.has(s.artist_name.toLowerCase())
+              ? '<span class="muted-tag">In library</span>'
+              : `<button class="sm" onclick="addSuggestedArtist('${escapeAttr(s.artist_name)}', ${s.id})">+ Add</button>`}
+            <button class="ghost sm" onclick="dismissSuggestion(${s.id})">Dismiss</button>
+          </div>
+        </div>
+      `).join('');
+    } catch (_) {
+      row.innerHTML = '<div class="empty">Could not load AI suggestions.</div>';
+    }
+  }
+
+  async function addSuggestedArtist(name, suggId) {
+    try {
+      await api('POST', '/artists', { name });
+      await api('DELETE', `/ai-suggestions/${suggId}`);
+      await loadArtists();
+      loadAISuggestions();
+    } catch (e) {
+      alert('Could not add artist: ' + (e.message || e));
+    }
+  }
+
+  async function dismissSuggestion(suggId) {
+    try {
+      await api('DELETE', `/ai-suggestions/${suggId}`);
+      loadAISuggestions();
+    } catch (_) {}
+  }
+
+  async function loadAIReleases() {
+    const row = document.getElementById('row-ai-releases');
+    try {
+      const items = await api('GET', '/ai-releases');
+      if (!items.length) {
+        row.innerHTML = '<div class="empty">No new-release highlights yet — check back after the weekly run, or click refresh.</div>';
+        return;
+      }
+      row.innerHTML = items.map(r => `
+        <div class="h-artist-card ai-release-card">
+          <div class="ai-release-title">${escapeHtml(r.album_title)}</div>
+          <div class="ai-release-artist">${escapeHtml(r.artist_name)} · ${escapeHtml(r.year || '')}</div>
+          <div class="ai-release-reason">${escapeHtml(r.reason)}</div>
+          <div class="ai-sugg-actions">
+            <button class="ghost sm" onclick="dismissRelease(${r.id})">Dismiss</button>
+          </div>
+        </div>
+      `).join('');
+    } catch (_) {
+      row.innerHTML = '<div class="empty">Could not load new-release highlights.</div>';
+    }
+  }
+
+  async function dismissRelease(id) {
+    try {
+      await api('DELETE', `/ai-releases/${id}`);
+      loadAIReleases();
+    } catch (_) {}
+  }
+
+  async function refreshReleases() {
+    const row = document.getElementById('row-ai-releases');
+    row.innerHTML = '<div class="loading">Asking AI — this can take 30-60s…</div>';
+    try {
+      await api('POST', '/ai-releases/refresh');
+      // Poll for completion — releases_feed grows when AI finishes.
+      let attempts = 0;
+      const initial = (await api('GET', '/ai-releases')).length;
+      const tick = setInterval(async () => {
+        attempts++;
+        const items = await api('GET', '/ai-releases');
+        if (items.length !== initial || attempts >= 30) {
+          clearInterval(tick);
+          loadAIReleases();
+        }
+      }, 4000);
+    } catch (_) {
+      loadAIReleases();
+    }
+  }
+
+  let _currentPlaylistId = null;
+
+  async function loadAIPlaylists() {
+    const list = document.getElementById('ai-playlists-list');
+    try {
+      const playlists = await api('GET', '/ai-playlists');
+      if (!playlists.length) {
+        list.innerHTML = '<div class="empty">No AI playlists yet — they refresh weekly, or use the buttons above to make one now.</div>';
+        return;
+      }
+      list.innerHTML = playlists.map(p => `
+        <div class="ai-playlist-row" onclick="openPlaylistModal(${p.id})">
+          <div class="ai-playlist-name">${escapeHtml(p.name)}</div>
+          <div class="ai-playlist-desc">${escapeHtml(p.description || '')}</div>
+          <div class="ai-playlist-meta">${p.tracks.length} tracks · ${p.created_at}</div>
+        </div>
+      `).join('');
+    } catch (_) {
+      list.innerHTML = '<div class="empty">Could not load playlists.</div>';
+    }
+  }
+
+  async function openPlaylistModal(id) {
+    const playlists = await api('GET', '/ai-playlists');
+    const p = playlists.find(x => x.id === id);
+    if (!p) return;
+    _currentPlaylistId = id;
+    document.getElementById('lbl-ai-playlist').textContent = p.name;
+    document.getElementById('ai-playlist-desc').textContent = p.description || '';
+    const tracks = p.tracks || [];
+    document.getElementById('ai-playlist-tracks').innerHTML = tracks.length
+      ? tracks.map((t, i) => `
+          <div class="ai-track">
+            <span class="ai-track-n">${i + 1}.</span>
+            <span class="ai-track-artist">${escapeHtml(t.artist || '?')}</span>
+            <span class="ai-track-sep">—</span>
+            <span class="ai-track-title">${escapeHtml(t.title || '?')}</span>
+          </div>
+        `).join('')
+      : '<div class="empty">No tracks.</div>';
+    openModal('modal-ai-playlist');
+  }
+
+  async function deleteCurrentPlaylist() {
+    if (!_currentPlaylistId) return;
+    if (!confirm('Delete this playlist?')) return;
+    await api('DELETE', `/ai-playlists/${_currentPlaylistId}`);
+    closeModal('modal-ai-playlist');
+    loadAIPlaylists();
+  }
+
+  async function submitMoodPlaylist() {
+    const input = document.getElementById('input-mood');
+    const mood = input.value.trim();
+    if (!mood) return;
+    input.disabled = true;
+    try {
+      await api('POST', '/ai-playlists/mood', { mood });
+      closeModal('modal-mood-playlist');
+      input.value = '';
+      input.disabled = false;
+      // The mood playlist queues — poll until it appears in the list.
+      const initial = (await api('GET', '/ai-playlists')).length;
+      let attempts = 0;
+      const tick = setInterval(async () => {
+        attempts++;
+        const cur = await api('GET', '/ai-playlists');
+        if (cur.length > initial || attempts >= 30) {
+          clearInterval(tick);
+          loadAIPlaylists();
+        }
+      }, 3000);
+    } catch (e) {
+      input.disabled = false;
+      alert('Could not generate playlist: ' + (e.message || e));
+    }
+  }
+
+  async function submitLyricSearch() {
+    const input = document.getElementById('input-lyric-query');
+    const results = document.getElementById('lyric-results');
+    const query = input.value.trim();
+    if (!query) return;
+    results.innerHTML = '<div class="loading">Asking AI…</div>';
+    try {
+      const { results: tracks } = await api('POST', '/ai-lyric-search', { query });
+      if (!tracks.length) {
+        results.innerHTML = '<div class="empty">No matches.</div>';
+        return;
+      }
+      results.innerHTML = tracks.map(t => `
+        <div class="ai-track">
+          <div>
+            <span class="ai-track-artist">${escapeHtml(t.artist)}</span>
+            <span class="ai-track-sep">—</span>
+            <span class="ai-track-title">${escapeHtml(t.title)}</span>
+          </div>
+          <div class="ai-track-reason">${escapeHtml(t.reason || '')}</div>
+        </div>
+      `).join('');
+    } catch (e) {
+      results.innerHTML = `<div class="empty">Search failed: ${escapeHtml(e.message || String(e))}</div>`;
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function escapeAttr(s) {
+    return String(s || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
   }
 
   async function loadRecent() {
