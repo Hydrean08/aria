@@ -5,6 +5,7 @@ import shutil
 import subprocess
 
 import httpx
+import mutagen
 
 import db
 from tagger import safe_name, fix_album_artist, enrich_file
