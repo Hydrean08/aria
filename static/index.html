@@ -744,6 +744,48 @@
   </div>
 </div>
 
+<!-- Mood playlist generator -->
+<div class="modal-backdrop hidden" id="modal-mood-playlist" role="dialog" aria-modal="true" aria-labelledby="lbl-mood-playlist">
+  <div class="modal">
+    <h3 id="lbl-mood-playlist">Generate Mood Playlist</h3>
+    <p class="modal-sub">Describe a mood, vibe, occasion, or theme. AI picks 12 tracks.</p>
+    <input type="text" id="input-mood" placeholder="e.g. rainy Sunday, workout pump, late-night drive"
+           onkeydown="if(event.key==='Enter')submitMoodPlaylist()" autofocus>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeModal('modal-mood-playlist')">Cancel</button>
+      <button onclick="submitMoodPlaylist()">Generate</button>
+    </div>
+  </div>
+</div>
+
+<!-- Lyric / description search -->
+<div class="modal-backdrop hidden" id="modal-lyric-search" role="dialog" aria-modal="true" aria-labelledby="lbl-lyric-search">
+  <div class="modal modal-lg">
+    <h3 id="lbl-lyric-search">Find Tracks by Description</h3>
+    <p class="modal-sub">Describe what you're looking for. AI suggests up to 10 tracks.</p>
+    <input type="text" id="input-lyric-query" placeholder="e.g. songs about heartbreak, instrumental jazz with sax solos"
+           onkeydown="if(event.key==='Enter')submitLyricSearch()" autofocus>
+    <div class="modal-actions">
+      <button class="ghost" onclick="closeModal('modal-lyric-search')">Cancel</button>
+      <button onclick="submitLyricSearch()">Search</button>
+    </div>
+    <div id="lyric-results" class="lyric-results"></div>
+  </div>
+</div>
+
+<!-- AI playlist tracks viewer -->
+<div class="modal-backdrop hidden" id="modal-ai-playlist" role="dialog" aria-modal="true" aria-labelledby="lbl-ai-playlist">
+  <div class="modal modal-lg">
+    <h3 id="lbl-ai-playlist">Playlist</h3>
+    <p id="ai-playlist-desc" class="modal-sub"></p>
+    <div id="ai-playlist-tracks" class="ai-track-list"></div>
+    <div class="modal-actions">
+      <button class="danger sm" id="ai-playlist-delete" onclick="deleteCurrentPlaylist()">Delete</button>
+      <button onclick="closeModal('modal-ai-playlist')">Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
   let allArtists      = [];
   let selectedArtist  = null;
