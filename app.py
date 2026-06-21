@@ -861,6 +861,35 @@ async def ai_lyric_search(body: LyricSearchIn):
     return {'query': q, 'results': results}
 
 
+@app.get('/api/ai-releases')
+async def list_ai_releases():
+    """AI-filtered new releases from monitored artists (last 12 months)."""
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            'SELECT id, artist_name, album_title, spotify_id, year, reason, created_at '
+            'FROM releases_feed WHERE dismissed = 0 ORDER BY id DESC'
+        )).fetchall()
+    return [{
+        'id': r[0], 'artist_name': r[1], 'album_title': r[2],
+        'spotify_id': r[3], 'year': r[4], 'reason': r[5], 'created_at': r[6],
+    } for r in rows]
+
+
+@app.delete('/api/ai-releases/{release_id}', status_code=204)
+async def dismiss_ai_release(release_id: int):
+    async with db.connect() as conn:
+        await conn.execute('UPDATE releases_feed SET dismissed = 1 WHERE id = ?', (release_id,))
+        await conn.commit()
+
+
+@app.post('/api/ai-releases/refresh', status_code=202)
+async def refresh_ai_releases():
+    """Manual trigger for the new-release watch — runs the same task the
+    weekly scheduler does. Useful from the UI for an on-demand refresh."""
+    asyncio.create_task(_task(_run_releases_watch()))
+    return {'queued': True}
+
+
 @app.post('/api/artists/{artist_id}/auto-genres')
 async def artist_auto_genres(artist_id: int):
     """AI-inferred canonical genre tags for an artist. Returns the list; does
