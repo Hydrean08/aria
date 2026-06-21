@@ -597,15 +597,43 @@ async def scan_existing_library() -> dict:
             top_picks = [aid for s, aid in ties if s == top_score]
             actual_tracks = subdir_info[subdir]
 
+            # When ALL candidates score below CONFIDENT_SCORE, there's no
+            # clean match — the folder is e.g. an original album whose
+            # release isn't even in the DB ("The Beautiful Letdown" when
+            # the DB only has Live/Deluxe/Remaster variants). Pulling in
+            # ANY of them creates a wrong-album false positive that's
+            # invisible until the user spots it. Either ask AI to confirm
+            # the best candidate, or leave the folder unmatched.
+            if top_score < CONFIDENT_SCORE:
+                # Hand to AI when there are at least two siblings (the
+                # original-vs-variant case worth disambiguating). If only
+                # one weak candidate exists, don't risk it — unmatched.
+                if len(ties) >= 2:
+                    lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}
+                    ambiguous.append({
+                        'artist_name': artist_name,
+                        'subdir': subdir,
+                        'actual_tracks': actual_tracks,
+                        'candidates': [
+                            {
+                                'album_id': aid,
+                                'title':    lookup.get(aid, ('?', 0, 'missing'))[0],
+                                'expected': lookup.get(aid, ('?', 0, 'missing'))[1],
+                                'status':   lookup.get(aid, ('?', 0, 'missing'))[2],
+                            }
+                            for _s, aid in ties[:5]  # cap at top 5 to keep prompt small
+                        ],
+                    })
+                else:
+                    unmatched_dirs.append(f'{artist_name}/{subdir} (low-confidence)')
+                continue
+
             if len(top_picks) == 1:
-                # Unambiguous winner.
+                # Unambiguous winner above the confidence threshold.
                 album_id = top_picks[0]
             else:
-                # Multiple DB rows tied for best score against this folder.
-                # Even at score 100 this is wrong to auto-resolve — two
-                # albums normalize-equal means the DB has duplicates or
-                # one is e.g. a remaster of the other. Defer to AI.
-                lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}  # id -> (title, track_count, status)
+                # Multiple DB rows tied at the top — defer to AI.
+                lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}
                 ambiguous.append({
                     'artist_name': artist_name,
                     'subdir': subdir,
