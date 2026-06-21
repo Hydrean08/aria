@@ -9,6 +9,11 @@ async def init(path: str):
     global DB_PATH
     DB_PATH = path
     async with aiosqlite.connect(path) as db:
+        # journal_mode is a persistent file-level setting — set once here
+        # rather than on every connect(). WAL lets readers and writers
+        # proceed concurrently, which matters when the cycle is writing
+        # 100s of album updates while the web UI is reading.
+        await db.execute('PRAGMA journal_mode=WAL')
         await db.executescript('''
             CREATE TABLE IF NOT EXISTS artists (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
