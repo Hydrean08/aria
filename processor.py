@@ -424,18 +424,26 @@ async def scan_existing_library() -> dict:
         artist_rows = await (await conn.execute(
             'SELECT id, name FROM artists'
         )).fetchall()
+        # Pull track_count so we can compare actual-on-disk against expected.
+        # Only consider rows we're allowed to flip — 'complete' and 'partial'
+        # rows are already in a known state and shouldn't be overwritten by
+        # the scan (the user may have curated them).
         album_rows = await (await conn.execute(
-            "SELECT id, artist_id, title FROM albums WHERE status = 'missing'"
+            "SELECT id, artist_id, title, track_count "
+            "FROM albums WHERE status = 'missing'"
         )).fetchall()
 
     # Group missing albums by artist for cheap per-artist lookup.
-    albums_by_artist: dict[int, list[tuple[int, str, str]]] = {}
-    for album_id, artist_id, title in album_rows:
+    albums_by_artist: dict[int, list[tuple[int, str, str, int]]] = {}
+    for album_id, artist_id, title, track_count in album_rows:
         albums_by_artist.setdefault(artist_id, []).append(
-            (album_id, title, _norm(title))
+            (album_id, title, _norm(title), track_count or 0)
         )
 
-    matched_ids: list[int] = []
+    # Three buckets: complete (actual >= expected), partial (1..expected-1),
+    # skipped (the folder has 0 audio files — we leave the DB row alone).
+    complete_ids: list[int] = []
+    partial_ids: list[int] = []
     unmatched_dirs: list[str] = []
     scanned_artists = 0
 
@@ -465,55 +473,76 @@ async def scan_existing_library() -> dict:
 
         for subdir in subdirs:
             full = os.path.join(artist_dir, subdir)
-            # Skip empty folders + folders with no audio.
+            # Count the actual audio files at the top of the album folder.
+            # Skip recursion — album dirs are flat and recursing would
+            # double-count anything in a /Disc 1/ subfolder.
             try:
-                has_audio = any(
-                    f.lower().endswith(audio_exts)
-                    for f in os.listdir(full)
+                actual_tracks = sum(
+                    1 for f in os.listdir(full)
+                    if os.path.isfile(os.path.join(full, f))
+                    and f.lower().endswith(audio_exts)
                 )
             except OSError:
-                has_audio = False
-            if not has_audio:
+                actual_tracks = 0
+            if actual_tracks == 0:
+                # Empty folder — don't even consider this a match.
                 continue
 
             subdir_norm = _norm(subdir)
             # Exact-normalized match first (Skillet/Alien Youth → "Alien Youth").
             # Then substring fallback so "Awake-Deluxe" matches "Awake (Deluxe Edition)".
             picked = None
-            for album_id, title, title_norm in artist_albums:
+            for album_id, title, title_norm, track_count in artist_albums:
                 if subdir_norm == title_norm:
-                    picked = album_id
+                    picked = (album_id, track_count)
                     break
             if picked is None:
-                for album_id, title, title_norm in artist_albums:
+                for album_id, title, title_norm, track_count in artist_albums:
                     if title_norm and (title_norm in subdir_norm or subdir_norm in title_norm):
-                        picked = album_id
+                        picked = (album_id, track_count)
                         break
-            if picked is not None:
-                matched_ids.append(picked)
-            else:
+            if picked is None:
                 unmatched_dirs.append(f'{artist_name}/{subdir}')
+                continue
 
-    if matched_ids:
+            album_id, expected = picked
+            # No expected count → can't classify safely; treat any presence
+            # as complete (matches Aria's behavior for albums it downloaded
+            # itself, which also have track_count=0 for some sources).
+            if expected <= 0 or actual_tracks >= expected:
+                complete_ids.append(album_id)
+            else:
+                partial_ids.append(album_id)
+
+    if complete_ids:
         async with db.connect() as conn:
-            # Mark these albums complete + record source so the UI can show
-            # "imported" vs "downloaded" later if we want to surface it.
-            placeholders = ','.join('?' * len(matched_ids))
+            placeholders = ','.join('?' * len(complete_ids))
             await conn.execute(
                 f"UPDATE albums SET status='complete', source='existing', "
                 f"updated_at=datetime('now') WHERE id IN ({placeholders})",
-                matched_ids,
+                complete_ids,
+            )
+            await conn.commit()
+    if partial_ids:
+        async with db.connect() as conn:
+            placeholders = ','.join('?' * len(partial_ids))
+            await conn.execute(
+                f"UPDATE albums SET status='partial', source='existing', "
+                f"updated_at=datetime('now') WHERE id IN ({placeholders})",
+                partial_ids,
             )
             await conn.commit()
 
     await db.log(
         'info',
-        f'Library scan: matched {len(matched_ids)} albums across '
-        f'{scanned_artists} artists ({len(unmatched_dirs)} unmatched dirs)',
+        f'Library scan: {len(complete_ids)} complete, {len(partial_ids)} partial '
+        f'across {scanned_artists} artists ({len(unmatched_dirs)} unmatched dirs)',
     )
     return {
         'scanned_artists': scanned_artists,
-        'matched_albums':  len(matched_ids),
+        'matched_albums':  len(complete_ids),  # kept for backward-compat
+        'complete':        len(complete_ids),
+        'partial':         len(partial_ids),
         'unmatched_dirs':  len(unmatched_dirs),
     }
 
