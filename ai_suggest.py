@@ -200,3 +200,177 @@ async def build_playlist(library_artists: list[str]) -> dict | None:
         }
     except Exception:
         return None
+
+
+async def build_mood_playlist(library_artists: list[str], mood: str) -> dict | None:
+    """Mood-driven playlist. Same shape as build_playlist but seeded with the
+    listener's free-text mood/theme. Library is taste reference, not a hard
+    constraint — model can include adjacent artists when the library doesn't
+    cover the requested mood."""
+    if not mood or not mood.strip():
+        return None
+    sample = (library_artists or [])[:60]
+    content = await _call_ollama(_MOOD_PLAYLIST_PROMPT.format(
+        mood=mood.strip()[:200],  # cap to keep the prompt budget sane
+        artists=", ".join(sample) or "(empty library)",
+    ))
+    if not content:
+        return None
+    raw = _extract_json(content, "{")
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        return {
+            "name": str(result.get("name", f"Mood: {mood[:40]}")),
+            "description": str(result.get("description", "")),
+            "track_list": json.dumps(result.get("tracks", [])),
+        }
+    except Exception:
+        return None
+
+
+async def library_digest(library_artists: list[str]) -> str | None:
+    """Returns a 3-5 sentence narrative about the library — dominant style,
+    interesting patterns, suggested direction. Prose, not JSON."""
+    if not library_artists:
+        return None
+    sample = library_artists[:60]
+    content = await _call_ollama(_DIGEST_PROMPT.format(artists=", ".join(sample)))
+    if not content:
+        return None
+    # Strip any accidental markdown fences GLM-4 sometimes adds.
+    return content.strip().strip("`").strip()
+
+
+async def lyric_search(query: str) -> list[dict]:
+    """Returns [{artist, title, reason}, ...] for a free-text track query."""
+    if not query or not query.strip():
+        return []
+    content = await _call_ollama(_LYRIC_SEARCH_PROMPT.format(query=query.strip()[:200]))
+    if not content:
+        return []
+    raw = _extract_json(content, "[")
+    if not raw:
+        return []
+    try:
+        results = json.loads(raw)
+        return [
+            {
+                "artist": str(r.get("artist", "")),
+                "title":  str(r.get("title", "")),
+                "reason": str(r.get("reason", "")),
+            }
+            for r in results
+            if isinstance(r, dict) and r.get("artist") and r.get("title")
+        ]
+    except Exception:
+        return []
+
+
+async def auto_genres(artist_name: str) -> list[str]:
+    """Returns up to 6 canonical genre tags for an artist. Lowercase, hyphenated."""
+    if not artist_name or not artist_name.strip():
+        return []
+    content = await _call_ollama(_GENRE_TAG_PROMPT.format(artist=artist_name.strip()[:80]))
+    if not content:
+        return []
+    raw = _extract_json(content, "[")
+    if not raw:
+        return []
+    try:
+        tags = json.loads(raw)
+        return [str(t).lower().strip() for t in tags if isinstance(t, str) and t.strip()][:6]
+    except Exception:
+        return []
+
+
+async def pick_album(artist_name: str, album_title: str, candidates: list[dict]) -> int | None:
+    """Given multiple album candidates (each a dict with a 'title' and 'year'
+    at minimum), pick the canonical studio version. Returns the index of the
+    chosen candidate, or None on failure. Returns 0 trivially if only one
+    candidate so callers don't need to special-case."""
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return 0
+    formatted = "\n".join(
+        f"{i}. {c.get('title', '?')} ({c.get('year', '?')}) — {c.get('source', '?')}"
+        for i, c in enumerate(candidates[:10])
+    )
+    content = await _call_ollama(_ALBUM_PICK_PROMPT.format(
+        artist=artist_name.strip()[:80],
+        album_title=album_title.strip()[:120],
+        candidates=formatted,
+    ))
+    if not content:
+        return None
+    raw = _extract_json(content, "{")
+    if not raw:
+        return None
+    try:
+        result = json.loads(raw)
+        idx = int(result.get("pick_index", -1))
+        if 0 <= idx < len(candidates):
+            return idx
+    except Exception:
+        pass
+    return None
+
+
+async def rank_filenames(artist: str, title: str, filenames: list[str]) -> list[int]:
+    """Rank Soulseek filename matches best-to-worst. Returns indices into
+    `filenames` ordered by quality. Empty list on failure — callers should
+    fall back to their existing heuristic."""
+    if not filenames or len(filenames) < 2:
+        return list(range(len(filenames)))
+    # Truncate to keep prompt budget reasonable. Soulseek searches can return
+    # 100+ results; ranking the top 20 by heuristic first is the caller's job.
+    sample = filenames[:20]
+    formatted = "\n".join(f"{i}. {f[:200]}" for i, f in enumerate(sample))
+    content = await _call_ollama(_FILENAME_RANK_PROMPT.format(
+        artist=artist.strip()[:80],
+        title=title.strip()[:120],
+        filenames=formatted,
+    ))
+    if not content:
+        return []
+    raw = _extract_json(content, "[")
+    if not raw:
+        return []
+    try:
+        ranks = json.loads(raw)
+        # Validate: all entries are valid indices.
+        return [int(i) for i in ranks if isinstance(i, (int, float)) and 0 <= int(i) < len(sample)]
+    except Exception:
+        return []
+
+
+async def filter_new_releases(releases: list[dict]) -> list[dict]:
+    """Given new releases by monitored artists, return the top 5 with reasons.
+    Each release dict should have at least 'artist' and 'title'."""
+    if not releases:
+        return []
+    formatted = "\n".join(
+        f"- {r.get('artist', '?')} — {r.get('title', '?')} ({r.get('year', '?')})"
+        for r in releases[:30]
+    )
+    content = await _call_ollama(_NEW_RELEASE_FILTER_PROMPT.format(releases=formatted))
+    if not content:
+        return []
+    raw = _extract_json(content, "[")
+    if not raw:
+        return []
+    try:
+        results = json.loads(raw)
+        return [
+            {
+                "artist": str(r.get("artist", "")),
+                "title":  str(r.get("title", "")),
+                "reason": str(r.get("reason", "")),
+            }
+            for r in results
+            if isinstance(r, dict) and r.get("artist") and r.get("title")
+        ][:5]
+    except Exception:
+        return []
