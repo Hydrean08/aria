@@ -94,11 +94,9 @@ async def _migrate(conn):
 @asynccontextmanager
 async def connect():
     async with aiosqlite.connect(DB_PATH) as conn:
-        # WAL lets readers and writers proceed without blocking each other —
-        # critical when the cycle is writing 100s of album updates while the
-        # web UI is reading via /api/items + /api/stats. busy_timeout makes
-        # waiters wait 5s instead of failing with SQLITE_BUSY.
-        await conn.execute('PRAGMA journal_mode=WAL')
+        # busy_timeout is per-connection — set it on every open. Makes
+        # waiters wait 5s on contended writes instead of failing with
+        # SQLITE_BUSY. WAL itself is set persistently in init().
         await conn.execute('PRAGMA busy_timeout=5000')
         await conn.execute('PRAGMA foreign_keys = ON')
         yield conn
