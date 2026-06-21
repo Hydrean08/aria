@@ -141,17 +141,17 @@ async def _scheduler():
         try:
             await _run_cycle_once()
         except Exception as e:
-            await db.log('error', f'Scheduler error: {e}')
+            await db.log('error', f'Scheduler error: {_fmt_exc(e)}')
         try:
             if not _ai_running and await _ai_due():
                 asyncio.create_task(_task(_run_ai_tasks()))
         except Exception as e:
-            await db.log('error', f'AI task check failed: {e}')
+            await db.log('error', f'AI task check failed: {_fmt_exc(e)}')
         await asyncio.sleep(INTERVAL)
 
 
 async def _run_cycle_once():
-    global _cycle_running
+    global _cycle_running, _last_cycle_end
     if _cycle_running:
         return
     _cycle_running = True
@@ -159,13 +159,14 @@ async def _run_cycle_once():
         await processor.run_cycle()
     finally:
         _cycle_running = False
+        _last_cycle_end = time.time()
 
 
 async def _task(coro):
     try:
         await coro
     except Exception as e:
-        await db.log('error', f'Background task failed: {e}')
+        await db.log('error', f'Background task failed: {_fmt_exc(e)}')
 
 
 # ── Artists ──────────────────────────────────────────────────────────────────
