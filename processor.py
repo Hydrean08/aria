@@ -448,6 +448,29 @@ async def scan_existing_library() -> dict:
     ambiguous: list[dict] = []  # passes to AI tiebreaker below
     scanned_artists = 0
 
+    def _classify(album_id: int, expected: int, actual_tracks: int) -> None:
+        """Decide whether an on-disk album folder counts as complete or
+        partial. Single source of truth so both the deterministic matcher
+        and the AI tiebreaker behave identically.
+
+        Rules:
+          expected > 0, actual >= expected → complete
+          expected > 0, actual <  expected → partial
+          expected unknown (0), actual >= 8 → complete (assume full album
+            when the folder is substantial — Deezer/Spotify sometimes
+            report 0 for live/compilation releases that ARE present)
+          expected unknown (0), actual <  8 → partial (don't claim done
+            when we genuinely can't verify)
+        """
+        if expected > 0 and actual_tracks >= expected:
+            complete_ids.append(album_id)
+        elif expected > 0:
+            partial_ids.append(album_id)
+        elif actual_tracks >= 8:
+            complete_ids.append(album_id)
+        else:
+            partial_ids.append(album_id)
+
     def _score(subdir_norm: str, title_norm: str) -> int:
         """Match quality score 0-100. Used to pick the BEST candidate album
         for a folder rather than the first substring hit. Priorities:
