@@ -401,42 +401,40 @@ def _read_album_tag(folder_path: str) -> str | None:
     matching folder names against DB titles. Used as the primary matcher
     so e.g. Switchfoot's `The Beautiful Letdown` folder gets identified as
     the 2003 original (per its TALB tag) rather than being force-matched
-    to a 2023 variant the DB happens to know about."""
+    to a 2023 variant the DB happens to know about.
+
+    mutagen is imported at top-of-module (it's a hard dep of tagger.py).
+    Format coverage: ID3=TALB, FLAC/Vorbis=album/ALBUM, MP4/M4A=©alb."""
     try:
-        import mutagen
-    except ImportError:
-        return None
-    try:
-        for name in sorted(os.listdir(folder_path)):
-            full = os.path.join(folder_path, name)
-            if not os.path.isfile(full):
-                continue
-            if not name.lower().endswith(('.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus')):
-                continue
-            try:
-                meta = mutagen.File(full)
-            except Exception:
-                continue
-            if meta is None:
-                continue
-            # Tag key varies by format: ID3=TALB, Vorbis=ALBUM/album,
-            # MP4=©alb. mutagen exposes lowercase 'album' for FLAC/Vorbis.
-            for key in ('TALB', 'album', 'ALBUM', '\xa9alb'):
-                val = meta.get(key) if key in meta else None
-                if val is None:
-                    continue
-                # Some backends return a Frame, some a list, some a str.
-                if hasattr(val, 'text') and val.text:
-                    return str(val.text[0]).strip() or None
-                if isinstance(val, (list, tuple)) and val:
-                    return str(val[0]).strip() or None
-                if isinstance(val, str):
-                    return val.strip() or None
-            # First decodable file checked but no album tag — give up
-            # rather than scanning the whole folder. If track 1 isn't
-            # tagged, the album probably isn't reliably tagged.
-            return None
+        names = sorted(os.listdir(folder_path))
     except OSError:
+        return None
+    for name in names:
+        full = os.path.join(folder_path, name)
+        if not os.path.isfile(full):
+            continue
+        if not name.lower().endswith(('.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus')):
+            continue
+        try:
+            meta = mutagen.File(full)
+        except Exception:
+            continue
+        if meta is None:
+            continue
+        for key in ('TALB', 'album', 'ALBUM', '\xa9alb'):
+            val = meta.get(key) if key in meta else None
+            if val is None:
+                continue
+            # Some backends return a Frame, some a list, some a str.
+            if hasattr(val, 'text') and val.text:
+                return str(val.text[0]).strip() or None
+            if isinstance(val, (list, tuple)) and val:
+                return str(val[0]).strip() or None
+            if isinstance(val, str):
+                return val.strip() or None
+        # First decodable file gave no album tag — give up rather than
+        # scanning the whole folder. If track 1 isn't tagged, the album
+        # probably isn't reliably tagged at all.
         return None
     return None
 
