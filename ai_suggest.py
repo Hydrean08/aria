@@ -34,6 +34,63 @@ Format: {{"name": "Playlist Name", "description": "One sentence vibe description
 Library artists:
 {artists}"""
 
+_MOOD_PLAYLIST_PROMPT = """\
+You are a music curator. The listener wants a playlist for this mood/theme: "{mood}"
+Pick 12 tracks (artist + title) that fit the mood — prefer artists from the library when they fit, but include adjacent artists when the library doesn't cover the mood well.
+Respond with ONLY a JSON object, no other text.
+Format: {{"name": "Playlist Name", "description": "One sentence about why these fit the mood", "tracks": [{{"artist": "...", "title": "..."}}]}}
+
+Library artists (for taste reference):
+{artists}"""
+
+_DIGEST_PROMPT = """\
+You are a music critic writing a personal note to the listener about their library. In 3-5 sentences:
+- Identify the dominant style/genre/era of the collection
+- Call out one interesting pattern or thread
+- Suggest one direction they might want to explore next
+Be specific — reference actual artists from the library.
+Respond with ONLY the prose, no JSON, no markdown.
+
+Library artists:
+{artists}"""
+
+_LYRIC_SEARCH_PROMPT = """\
+You are a music search assistant. The listener is looking for tracks that match this description: "{query}"
+Suggest up to 10 tracks (artist + title) that fit, preferring tracks well-known for that exact theme or feeling.
+Respond with ONLY a JSON array, no other text.
+Format: [{{"artist": "Artist Name", "title": "Track Title", "reason": "Why this matches"}}]"""
+
+_GENRE_TAG_PROMPT = """\
+You are a music classifier. For the artist "{artist}", give 3-6 canonical genre tags in order from most to least specific.
+Use lowercase, hyphenated tags from the standard music taxonomy (e.g. "alternative-rock", "post-grunge", "synth-pop", "contemporary-r-and-b").
+Respond with ONLY a JSON array of strings, no other text.
+Format: ["tag1", "tag2", "tag3"]"""
+
+_ALBUM_PICK_PROMPT = """\
+You are a music librarian. The listener wants the canonical studio version of "{album_title}" by {artist}. Multiple editions exist in the search results. Pick the one that best matches "the original studio album" — NOT live, deluxe, anniversary, remastered, compilation, or single. If they're all alternate editions, pick the earliest. If only one looks like a studio album, pick it.
+Respond with ONLY a JSON object: {{"pick_index": N, "reason": "..."}}
+N is the 0-based index from the list below.
+
+Candidates:
+{candidates}"""
+
+_FILENAME_RANK_PROMPT = """\
+You are matching SoulSeek search results to a target track. The target is "{artist} — {title}".
+Rank these filenames from BEST to WORST match. Prefer: exact artist+title match, FLAC over MP3, higher bitrate, no "live"/"karaoke"/"cover" tags unless target asks for them, no extra prefixes/suffixes.
+Respond with ONLY a JSON array of indices (0-based), best first.
+Format: [3, 1, 0, 2]
+
+Filenames:
+{filenames}"""
+
+_NEW_RELEASE_FILTER_PROMPT = """\
+You are a release curator. From these new albums by artists the listener follows, pick the 5 most interesting ones to highlight. Skip live albums, EPs of B-sides, and re-releases unless they're notable. Prefer studio albums + significant collaborations.
+Respond with ONLY a JSON array, no other text.
+Format: [{{"artist": "...", "title": "...", "reason": "Why this stands out"}}]
+
+New releases:
+{releases}"""
+
 
 _RETRY_DELAYS = (2.0, 6.0)  # 3 attempts total: 0s, 2s, 6s backoff
 _RETRY_EXC = (httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ReadError)
