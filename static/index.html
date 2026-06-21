@@ -1754,6 +1754,27 @@ async function loadStats() {
     pill.textContent = 'Running…'; pill.className = 'running';
   }
 
+  async function scanExistingLibrary() {
+    // Walks MUSIC_DIR on the server + marks albums whose folders exist as
+    // complete. Idempotent. Surfaces the result counts inline so Chuck can
+    // see what changed without digging through logs.
+    const pill = document.getElementById('cycle-pill');
+    const orig = pill.textContent;
+    pill.textContent = 'Scanning…'; pill.className = 'running';
+    try {
+      const r = await api('POST', '/scan-existing');
+      pill.textContent = `Matched ${r.matched_albums}/${r.matched_albums + r.unmatched_dirs}`;
+      pill.className = '';
+      // Reload artists so the album-count badges update without a page refresh.
+      await loadArtists();
+      // Restore the idle pill after a few seconds.
+      setTimeout(() => { pill.textContent = orig || 'Idle'; }, 5000);
+    } catch (e) {
+      pill.textContent = 'Scan failed'; pill.className = '';
+      alert('Scan failed: ' + (e.message || e));
+    }
+  }
+
   function toggleLogs() {
     logsCollapsed = !logsCollapsed;
     document.getElementById('log-body').classList.toggle('collapsed', logsCollapsed);
