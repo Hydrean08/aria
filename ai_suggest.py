@@ -67,9 +67,15 @@ Respond with ONLY a JSON array of strings, no other text.
 Format: ["tag1", "tag2", "tag3"]"""
 
 _ALBUM_PICK_PROMPT = """\
-You are a music librarian. The listener wants the canonical studio version of "{album_title}" by {artist}. Multiple editions exist in the search results. Pick the one that best matches "the original studio album" — NOT live, deluxe, anniversary, remastered, compilation, or single. If they're all alternate editions, pick the earliest. If only one looks like a studio album, pick it.
+You are a music librarian. The listener has an album on disk titled "{album_title}" by {artist}, and the library DB has these candidate entries that MIGHT be the same album. Decide which DB entry, if any, is the same release.
+
+Rules:
+- Prefer EXACT name matches over variants (e.g. "Album" beats "Album (Live)" or "Album (Deluxe)").
+- If the disk title is just the base name and a candidate matches exactly, pick it even if other variants exist.
+- If NONE of the candidates is clearly the same release as the disk album, abstain with pick_index = -1. Do NOT guess. Variants like "Deluxe Edition", "Live", "Anniversary Remaster", "Our Version" are DIFFERENT releases — only pick them if the disk title also indicates that variant.
+
 Respond with ONLY a JSON object: {{"pick_index": N, "reason": "..."}}
-N is the 0-based index from the list below.
+N is the 0-based index from the list, or -1 to abstain.
 
 Candidates:
 {candidates}"""
