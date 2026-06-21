@@ -51,7 +51,17 @@ _INDEX_PATH = Path(__file__).parent / 'static' / 'index.html'
 async def lifespan(app: FastAPI):
     global _scheduler_task, _index_html
     await db.init(DB_PATH)
-    await deezer.login()
+    # Deezer login is critical — without it every Deezer-sourced album fails.
+    # The function returns False (rather than raising) so startup can continue
+    # if e.g. Deezer is briefly unreachable, but the failure has to be loud or
+    # an expired ARL silently disables half the sync pipeline.
+    if not await deezer.login():
+        await db.log(
+            'error',
+            'Deezer login FAILED at startup — check DEEMIX_ARL '
+            '(it expires every few months). Deezer downloads will not work '
+            'until this is fixed.',
+        )
     _index_html = await asyncio.to_thread(_INDEX_PATH.read_text)
     _scheduler_task = asyncio.create_task(_scheduler())
     yield
