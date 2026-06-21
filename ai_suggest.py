@@ -292,14 +292,16 @@ async def auto_genres(artist_name: str) -> list[str]:
 
 
 async def pick_album(artist_name: str, album_title: str, candidates: list[dict]) -> int | None:
-    """Given multiple album candidates (each a dict with a 'title' and 'year'
-    at minimum), pick the canonical studio version. Returns the index of the
-    chosen candidate, or None on failure. Returns 0 trivially if only one
-    candidate so callers don't need to special-case."""
+    """Given album candidates (each a dict with a 'title' and 'year' at
+    minimum), pick the one that's the same release as `album_title` for
+    `artist_name`. Returns the chosen candidate's index, or None if AI
+    abstains (no candidate is a clean match) or the call fails.
+
+    Single-candidate inputs are STILL asked — a one-element list often means
+    "we found one possibly-relevant variant, but it might be wrong" and we
+    want AI's judgment on whether it's the same release, not a free pass."""
     if not candidates:
         return None
-    if len(candidates) == 1:
-        return 0
     formatted = "\n".join(
         f"{i}. {c.get('title', '?')} ({c.get('year', '?')}) — {c.get('source', '?')}"
         for i, c in enumerate(candidates[:10])
