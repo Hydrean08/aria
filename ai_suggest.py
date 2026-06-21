@@ -5,7 +5,13 @@ import logging
 import httpx
 
 OLLAMA_URL = "http://ollama-embed:11434/api/chat"
-MODEL = "huihui_ai/qwen3-abliterated:8b-v2"
+# GLM-4-9B-Chat — Tsinghua/Zhipu open-weights model. Best open-source
+# performer for music recommendation/playlist understanding in the Nov 2025
+# arxiv benchmark (16.85% HR@1 on Music Era, beating Llama-3-8B and other
+# open models). Fits in ~6 GB on Q4_K_M so inference is fast on the 3060.
+# Previous value pointed at "huihui_ai/qwen3-abliterated:8b-v2" which was
+# never actually installed on ollama-embed — calls silently failed.
+MODEL = "glm4:9b"
 TIMEOUT = 60.0
 
 _log = logging.getLogger(__name__)
