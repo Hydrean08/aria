@@ -424,13 +424,16 @@ async def scan_existing_library() -> dict:
         artist_rows = await (await conn.execute(
             'SELECT id, name FROM artists'
         )).fetchall()
-        # Pull track_count so we can compare actual-on-disk against expected.
-        # Only consider rows we're allowed to flip — 'complete' and 'partial'
-        # rows are already in a known state and shouldn't be overwritten by
-        # the scan (the user may have curated them).
+        # Pull ALL album rows, not just 'missing'. Already-complete rows are
+        # included in the matcher so they can "absorb" their natural on-disk
+        # folder match — without this, an Aria-downloaded album like
+        # 'The Breakthrough' would leave its folder available for the matcher
+        # to mismatch against a sibling like 'The Breakthrough (Live)'.
+        # We skip writing to non-missing rows below; they only participate as
+        # claim-holders so other DB rows can't steal their folder.
         album_rows = await (await conn.execute(
-            "SELECT id, artist_id, title, track_count "
-            "FROM albums WHERE status = 'missing'"
+            "SELECT id, artist_id, title, track_count, status "
+            "FROM albums"
         )).fetchall()
 
     # Group missing albums by artist for cheap per-artist lookup.
