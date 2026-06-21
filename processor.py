@@ -436,11 +436,14 @@ async def scan_existing_library() -> dict:
             "FROM albums"
         )).fetchall()
 
-    # Group missing albums by artist for cheap per-artist lookup.
-    albums_by_artist: dict[int, list[tuple[int, str, str, int]]] = {}
-    for album_id, artist_id, title, track_count in album_rows:
+    # Group all album rows by artist. The `status` field is stashed so
+    # _classify can skip writes for rows that are already complete/partial
+    # — those rows still participate in matching (to absorb their natural
+    # folder claim) but their DB state doesn't get touched.
+    albums_by_artist: dict[int, list[tuple[int, str, str, int, str]]] = {}
+    for album_id, artist_id, title, track_count, status in album_rows:
         albums_by_artist.setdefault(artist_id, []).append(
-            (album_id, title, _norm(title), track_count or 0)
+            (album_id, title, _norm(title), track_count or 0, status or 'missing')
         )
 
     # Three buckets: complete (actual >= expected), partial (1..expected-1),
