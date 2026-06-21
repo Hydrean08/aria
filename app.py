@@ -255,6 +255,11 @@ async def _scheduler():
                 asyncio.create_task(_task(_run_ai_tasks()))
         except Exception as e:
             await db.log('error', f'AI task check failed: {_fmt_exc(e)}')
+        try:
+            if not _releases_running and await _releases_due():
+                asyncio.create_task(_task(_run_releases_watch()))
+        except Exception as e:
+            await db.log('error', f'Releases-watch check failed: {_fmt_exc(e)}')
         await asyncio.sleep(INTERVAL)
 
 
