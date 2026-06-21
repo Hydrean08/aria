@@ -454,12 +454,19 @@ async def scan_existing_library() -> dict:
     ambiguous: list[dict] = []  # passes to AI tiebreaker below
     scanned_artists = 0
 
-    def _classify(album_id: int, expected: int, actual_tracks: int) -> None:
+    def _classify(album_id: int, expected: int, actual_tracks: int, current_status: str) -> None:
         """Decide whether an on-disk album folder counts as complete or
-        partial. Single source of truth so both the deterministic matcher
-        and the AI tiebreaker behave identically.
+        partial, and record the album_id for the corresponding bucket so
+        the final UPDATE pass applies it.
 
-        Rules:
+        SKIP entirely when the row is already complete/partial — those rows
+        only participate in matching to absorb their natural folder claim
+        (preventing the studio version's folder from being mismatched to a
+        Live sibling, for example). Overwriting their source='existing'
+        would lose attribution to whatever source originally fetched them
+        (ytmusic, deezer, etc.).
+
+        Rules for missing rows:
           expected > 0, actual >= expected → complete
           expected > 0, actual <  expected → partial
           expected unknown (0), actual >= 8 → complete (assume full album
@@ -468,6 +475,8 @@ async def scan_existing_library() -> dict:
           expected unknown (0), actual <  8 → partial (don't claim done
             when we genuinely can't verify)
         """
+        if current_status != 'missing':
+            return
         if expected > 0 and actual_tracks >= expected:
             complete_ids.append(album_id)
         elif expected > 0:
