@@ -656,13 +656,15 @@ async def scan_existing_library() -> dict:
 
                 claimed_album_ids.add(picked_id)
                 actual_tracks = amb['actual_tracks']
-                # Expected was stashed on the candidate dict at ambiguity
-                # time, so no need to walk albums_by_artist again.
-                expected = next(
-                    (c['expected'] for c in amb['candidates'] if c['album_id'] == picked_id),
-                    0,
+                # Expected + status were stashed on the candidate dict at
+                # ambiguity time, so no need to walk albums_by_artist again.
+                picked_candidate = next(
+                    (c for c in amb['candidates'] if c['album_id'] == picked_id),
+                    None,
                 )
-                _classify(picked_id, expected, actual_tracks)
+                expected = picked_candidate['expected'] if picked_candidate else 0
+                current_status = picked_candidate['status'] if picked_candidate else 'missing'
+                _classify(picked_id, expected, actual_tracks, current_status)
         except Exception as e:
             await db.log('warn', f'Library scan: AI tiebreaker failed ({type(e).__name__}); ambiguous folders left unmatched')
 
