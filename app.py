@@ -175,6 +175,59 @@ class ArtistIn(BaseModel):
     name: str
 
 
+@app.get('/health')
+async def health():
+    """Real dependency check — returns 200 when Aria is healthy enough to
+    keep processing music, 503 otherwise. Designed for uptime probes —
+    fast, bounded, meaningful enough to act on.
+
+    Checks:
+      - cycle: stalled if >2 * INTERVAL since last completion
+      - db: must be readable
+      - ollama: informational (AI suggestions break if unreachable, but the
+                music sync keeps working)
+    """
+    checks: dict[str, dict] = {}
+    ok = True
+    now = time.time()
+
+    # Cycle freshness — the single most important signal.
+    if _last_cycle_end is None:
+        checks['cycle'] = {'status': 'warming', 'age_seconds': None}
+    else:
+        age = now - _last_cycle_end
+        stale = age > (2 * INTERVAL)
+        checks['cycle'] = {
+            'status': 'stale' if stale else 'ok',
+            'age_seconds': round(age, 1),
+            'interval': INTERVAL,
+        }
+        if stale:
+            ok = False
+
+    # DB readability — if this fails every endpoint is broken anyway, so
+    # treating it as fatal is appropriate.
+    try:
+        async with db.connect() as conn:
+            await (await conn.execute('SELECT 1')).fetchone()
+        checks['db'] = {'status': 'ok'}
+    except Exception as e:
+        checks['db'] = {'status': 'fail', 'error': f'{type(e).__name__}: {e!r}'}
+        ok = False
+
+    # Ollama probe — informational. The music sync doesn't depend on it,
+    # so a down Ollama is just "AI suggestions paused" not "Aria is down".
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            r = await client.get(f'{ai_suggest.OLLAMA_URL.rsplit("/api", 1)[0]}/api/tags')
+        checks['ollama'] = {'status': 'ok' if r.status_code < 500 else 'unreachable'}
+    except Exception:
+        checks['ollama'] = {'status': 'unreachable'}
+
+    body = {'ok': ok, 'checks': checks, 'ts': now}
+    return JSONResponse(body, status_code=200 if ok else 503)
+
+
 @app.get('/api/artists')
 async def list_artists():
     async with db.connect() as conn:
