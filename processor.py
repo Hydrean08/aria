@@ -771,19 +771,25 @@ async def scan_existing_library() -> dict:
                         if c['album_id'] not in claimed_album_ids]
                 if not free:
                     continue
-                if len(free) == 1:
-                    picked_id = free[0]['album_id']
-                else:
-                    pick_idx = await ai_suggest.pick_album(
-                        amb['artist_name'],
-                        amb['subdir'],
-                        [{'title': c['title'], 'year': '', 'source': 'on-disk'}
-                         for c in free],
-                    )
-                    if pick_idx is None:
-                        # AI couldn't decide — skip rather than guess wrong.
-                        continue
-                    picked_id = free[pick_idx]['album_id']
+                # Always ask AI — even with one surviving candidate. Auto-
+                # accepting the lone survivor is exactly the bug that
+                # mismatched Switchfoot's 2003 'Beautiful Letdown' folder
+                # to the 2023 'Our Version' DB row. The prompt now supports
+                # an explicit abstain return (-1 → None) so AI declines if
+                # the only candidate isn't actually the same release.
+                # Use the folder's audio file tag as the disk title when
+                # available — ground truth beats folder-name heuristics.
+                disk_title = amb.get('tag') or amb['subdir']
+                pick_idx = await ai_suggest.pick_album(
+                    amb['artist_name'],
+                    disk_title,
+                    [{'title': c['title'], 'year': '', 'source': 'on-disk'}
+                     for c in free],
+                )
+                if pick_idx is None:
+                    # AI abstained or call failed — skip rather than guess wrong.
+                    continue
+                picked_id = free[pick_idx]['album_id']
 
                 claimed_album_ids.add(picked_id)
                 actual_tracks = amb['actual_tracks']
