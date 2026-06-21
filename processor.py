@@ -568,6 +568,15 @@ async def scan_existing_library() -> dict:
                 if s > 0:
                     candidates.append((s, subdir, album_id, track_count))
 
+        # Minimum score to commit a match without AI help. Folders that only
+        # produce sub-CONFIDENT_SCORE matches (typically several siblings all
+        # at substring-tier 30-50, like "The Beautiful Letdown" matching
+        # FIVE different "Beautiful Letdown (X)" DB rows when the original
+        # isn't in the DB) get either AI-resolved or left unmatched. Without
+        # this threshold the matcher would pick the highest-scoring sibling
+        # and claim it complete, contaminating the library state.
+        CONFIDENT_SCORE = 60
+
         # Resolve highest score first. A folder + album pair only counts if
         # neither has been claimed yet. Anything tied at the same score for
         # the same subdir gets recorded for AI tiebreaking below.
