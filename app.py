@@ -86,7 +86,19 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["X-XSS-Protection"] = "1; mode=block"
+        # Tight CSP: only same-origin scripts and styles, allow https images
+        # for album/artist art from Spotify/Deezer/Tidal/MusicBrainz CDNs.
+        # 'unsafe-inline' is needed for style attributes used in the SPA.
+        # X-XSS-Protection was dropped — it's deprecated; Chrome removed
+        # support in 2019 and modern browsers ignore it.
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' https: data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'"
+        )
         return response
 
 app.add_middleware(SecurityHeadersMiddleware)
