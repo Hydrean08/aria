@@ -610,6 +610,31 @@ async def scan_existing_library() -> dict:
         candidates: list[tuple[int, str, int, int]] = []  # (score, subdir, album_id, expected)
         subdir_info: dict[str, int] = {}  # subdir -> actual_tracks
         subdir_tags: dict[str, str] = {}  # subdir -> on-disk album tag (ground truth)
+        # Lookup built once per artist; closes over by the helper below.
+        # id → (title, track_count, status). Used to populate AI tiebreaker
+        # records so both ambiguity sites stay consistent.
+        artist_lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}
+
+        def _record_ambiguity(subdir_name: str, album_ids: list[int], actual: int) -> None:
+            """Append an entry to the AI tiebreaker queue. Shared by both
+            ambiguity branches so adding fields like the on-disk tag stays
+            in one place — the prior duplication just bit us by skipping
+            'tag' on one of the two sites."""
+            ambiguous.append({
+                'artist_name': artist_name,
+                'subdir': subdir_name,
+                'tag': subdir_tags.get(subdir_name),  # tier-1 ground truth, if any
+                'actual_tracks': actual,
+                'candidates': [
+                    {
+                        'album_id': aid,
+                        'title':    artist_lookup.get(aid, ('?', 0, 'missing'))[0],
+                        'expected': artist_lookup.get(aid, ('?', 0, 'missing'))[1],
+                        'status':   artist_lookup.get(aid, ('?', 0, 'missing'))[2],
+                    }
+                    for aid in album_ids
+                ],
+            })
         # Tag-resolved subdirs simply don't produce candidates (loop below
         # adds none when the matched album is already in claimed_album_ids),
         # so the name-resolution pass naturally skips them without a
