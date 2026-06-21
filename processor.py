@@ -550,19 +550,25 @@ async def scan_existing_library() -> dict:
             top_picks = [aid for s, aid in ties if s == top_score]
             actual_tracks = subdir_info[subdir]
 
-            if len(top_picks) == 1 or top_score >= 90:
-                # Clear winner (only one top, or score is so high we trust it).
+            if len(top_picks) == 1:
+                # Unambiguous winner.
                 album_id = top_picks[0]
             else:
-                # Genuine ambiguity — record for AI to break the tie.
-                # Look up titles for the prompt.
-                title_lookup = {a[0]: a[1] for a in artist_albums}
+                # Multiple DB rows tied for best score against this folder.
+                # Even at score 100 this is wrong to auto-resolve — two
+                # albums normalize-equal means the DB has duplicates or
+                # one is e.g. a remaster of the other. Defer to AI.
+                lookup = {a[0]: (a[1], a[3]) for a in artist_albums}  # id -> (title, track_count)
                 ambiguous.append({
                     'artist_name': artist_name,
                     'subdir': subdir,
                     'actual_tracks': actual_tracks,
                     'candidates': [
-                        {'album_id': aid, 'title': title_lookup.get(aid, '?')}
+                        {
+                            'album_id': aid,
+                            'title':    lookup.get(aid, ('?', 0))[0],
+                            'expected': lookup.get(aid, ('?', 0))[1],
+                        }
                         for aid in top_picks
                     ],
                 })
