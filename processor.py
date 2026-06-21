@@ -445,12 +445,48 @@ async def scan_existing_library() -> dict:
     complete_ids: list[int] = []
     partial_ids: list[int] = []
     unmatched_dirs: list[str] = []
+    ambiguous: list[dict] = []  # passes to AI tiebreaker below
     scanned_artists = 0
 
+    def _score(subdir_norm: str, title_norm: str) -> int:
+        """Match quality score 0-100. Used to pick the BEST candidate album
+        for a folder rather than the first substring hit. Priorities:
+          100 = exact normalized equality (Alien Youth = Alien Youth)
+           80 = title equals subdir minus a parenthetical suffix
+                (so 'The Breakthrough' folder beats 'The Breakthrough (Live)'
+                when both DB rows exist and the folder is the bare name)
+           60 = subdir starts with title (or vice versa) — partial-tail wins
+                over a substring buried in the middle
+        20-50 = generic substring containment, scored by length similarity
+                (closer lengths score higher to avoid 'TBL' matching 'TBL2024')
+            0 = no match
+        """
+        if not subdir_norm or not title_norm:
+            return 0
+        if subdir_norm == title_norm:
+            return 100
+        # Strip a trailing parenthetical from the longer side to see if the
+        # cores match — handles ('The Breakthrough' folder ↔ 'The Breakthrough'
+        # DB row when 'The Breakthrough (Live)' also exists in the DB).
+        if subdir_norm.startswith(title_norm) and len(subdir_norm) - len(title_norm) <= 3:
+            return 90
+        if title_norm.startswith(subdir_norm) and len(title_norm) - len(subdir_norm) <= 3:
+            return 90
+        if subdir_norm.startswith(title_norm) or title_norm.startswith(subdir_norm):
+            return 60
+        if title_norm in subdir_norm or subdir_norm in title_norm:
+            # Length-similarity weighting: tighter overlap = better.
+            shorter = min(len(subdir_norm), len(title_norm))
+            longer  = max(len(subdir_norm), len(title_norm))
+            ratio = shorter / longer  # in (0, 1]
+            return int(20 + 30 * ratio)
+        return 0
+
+    # Track which DB album ids have been claimed by an on-disk folder this
+    # run so we never assign two folders to the same album.
+    claimed_album_ids: set[int] = set()
+
     for artist_id, artist_name in artist_rows:
-        # Aria writes Artist/ as safe_name(artist_name) — match that first,
-        # then fall back to the raw artist name in case the user organized
-        # things slightly differently before Aria existed.
         candidate_dirs = [
             os.path.join(MUSIC_DIR, safe_name(artist_name)),
             os.path.join(MUSIC_DIR, artist_name),
@@ -468,14 +504,15 @@ async def scan_existing_library() -> dict:
 
         artist_albums = albums_by_artist.get(artist_id, [])
         if not artist_albums:
-            # Artist exists on disk + DB, but no missing albums to match.
             continue
 
+        # Phase 1: score every folder against every unclaimed album, then
+        # resolve greedily highest-score-first. This is O(N*M) per artist
+        # but N and M are small (dozens, not thousands).
+        candidates: list[tuple[int, str, int, int]] = []  # (score, subdir, album_id, expected)
+        subdir_info: dict[str, int] = {}  # subdir -> actual_tracks
         for subdir in subdirs:
             full = os.path.join(artist_dir, subdir)
-            # Count the actual audio files at the top of the album folder.
-            # Skip recursion — album dirs are flat and recursing would
-            # double-count anything in a /Disc 1/ subfolder.
             try:
                 actual_tracks = sum(
                     1 for f in os.listdir(full)
@@ -485,34 +522,129 @@ async def scan_existing_library() -> dict:
             except OSError:
                 actual_tracks = 0
             if actual_tracks == 0:
-                # Empty folder — don't even consider this a match.
-                continue
-
+                continue  # empty folders can't be matches
+            subdir_info[subdir] = actual_tracks
             subdir_norm = _norm(subdir)
-            # Exact-normalized match first (Skillet/Alien Youth → "Alien Youth").
-            # Then substring fallback so "Awake-Deluxe" matches "Awake (Deluxe Edition)".
-            picked = None
             for album_id, title, title_norm, track_count in artist_albums:
-                if subdir_norm == title_norm:
-                    picked = (album_id, track_count)
-                    break
-            if picked is None:
-                for album_id, title, title_norm, track_count in artist_albums:
-                    if title_norm and (title_norm in subdir_norm or subdir_norm in title_norm):
-                        picked = (album_id, track_count)
-                        break
-            if picked is None:
-                unmatched_dirs.append(f'{artist_name}/{subdir}')
+                s = _score(subdir_norm, title_norm)
+                if s > 0:
+                    candidates.append((s, subdir, album_id, track_count))
+
+        # Resolve highest score first. A folder + album pair only counts if
+        # neither has been claimed yet. Anything tied at the same score for
+        # the same subdir gets recorded for AI tiebreaking below.
+        candidates.sort(key=lambda c: -c[0])
+        claimed_subdirs: set[str] = set()
+        per_subdir_ties: dict[str, list[tuple[int, int]]] = {}
+        for score, subdir, album_id, expected in candidates:
+            if subdir in claimed_subdirs or album_id in claimed_album_ids:
+                continue
+            # Collect ties at the same score — if more than one DB album
+            # ties for the best score against a folder, defer to AI.
+            per_subdir_ties.setdefault(subdir, []).append((score, album_id))
+            # Only finalize the assignment once we've inspected ties for it.
+
+        for subdir, ties in per_subdir_ties.items():
+            ties.sort(key=lambda x: -x[0])
+            top_score = ties[0][0]
+            top_picks = [aid for s, aid in ties if s == top_score]
+            actual_tracks = subdir_info[subdir]
+
+            if len(top_picks) == 1 or top_score >= 90:
+                # Clear winner (only one top, or score is so high we trust it).
+                album_id = top_picks[0]
+            else:
+                # Genuine ambiguity — record for AI to break the tie.
+                # Look up titles for the prompt.
+                title_lookup = {a[0]: a[1] for a in artist_albums}
+                ambiguous.append({
+                    'artist_name': artist_name,
+                    'subdir': subdir,
+                    'actual_tracks': actual_tracks,
+                    'candidates': [
+                        {'album_id': aid, 'title': title_lookup.get(aid, '?')}
+                        for aid in top_picks
+                    ],
+                })
                 continue
 
-            album_id, expected = picked
-            # No expected count → can't classify safely; treat any presence
-            # as complete (matches Aria's behavior for albums it downloaded
-            # itself, which also have track_count=0 for some sources).
-            if expected <= 0 or actual_tracks >= expected:
+            claimed_subdirs.add(subdir)
+            claimed_album_ids.add(album_id)
+
+            # Find expected track count for this assigned album.
+            expected = next(
+                (tc for aid, _t, _tn, tc in artist_albums if aid == album_id),
+                0,
+            )
+
+            # Classification rules — see commit message in PR for context.
+            #   actual >= expected (and expected > 0)  → complete
+            #   actual in [1, expected)                → partial
+            #   expected unknown (0) AND actual >= 8   → complete (assume
+            #     a full album when the folder looks substantial)
+            #   expected unknown (0) AND actual <  8   → partial (don't
+            #     guarantee completeness when we genuinely don't know)
+            if expected > 0 and actual_tracks >= expected:
+                complete_ids.append(album_id)
+            elif expected > 0:
+                partial_ids.append(album_id)
+            elif actual_tracks >= 8:
                 complete_ids.append(album_id)
             else:
                 partial_ids.append(album_id)
+
+        # Folders that scored against nothing are unmatched.
+        for subdir in subdirs:
+            if subdir in subdir_info and subdir not in claimed_subdirs:
+                if subdir not in per_subdir_ties:
+                    unmatched_dirs.append(f'{artist_name}/{subdir}')
+
+    # ── AI tiebreaker pass ────────────────────────────────────────────────
+    # For each ambiguous subdir (two+ DB rows tied for best score), ask GLM-4
+    # which DB title matches the on-disk folder. Run sequentially so we don't
+    # hammer ollama — there are typically <5 ties per scan.
+    if ambiguous:
+        try:
+            import ai_suggest  # local import to keep processor.py importable without ollama at import time
+            for amb in ambiguous:
+                # Re-check that no candidate has been claimed since we deferred.
+                free = [c for c in amb['candidates']
+                        if c['album_id'] not in claimed_album_ids]
+                if not free:
+                    continue
+                if len(free) == 1:
+                    picked_id = free[0]['album_id']
+                else:
+                    pick_idx = await ai_suggest.pick_album(
+                        amb['artist_name'],
+                        amb['subdir'],
+                        [{'title': c['title'], 'year': '', 'source': 'on-disk'}
+                         for c in free],
+                    )
+                    if pick_idx is None:
+                        # AI couldn't decide — skip rather than guess wrong.
+                        continue
+                    picked_id = free[pick_idx]['album_id']
+
+                claimed_album_ids.add(picked_id)
+                # Look up track_count + actual tracks for classification.
+                actual_tracks = amb['actual_tracks']
+                expected = 0
+                for artist_id, _name in artist_rows:
+                    for aid, _t, _tn, tc in albums_by_artist.get(artist_id, []):
+                        if aid == picked_id:
+                            expected = tc
+                            break
+                if expected > 0 and actual_tracks >= expected:
+                    complete_ids.append(picked_id)
+                elif expected > 0:
+                    partial_ids.append(picked_id)
+                elif actual_tracks >= 8:
+                    complete_ids.append(picked_id)
+                else:
+                    partial_ids.append(picked_id)
+        except Exception as e:
+            await db.log('warn', f'Library scan: AI tiebreaker failed ({type(e).__name__}); ambiguous folders left unmatched')
 
     if complete_ids:
         async with db.connect() as conn:
@@ -536,14 +668,16 @@ async def scan_existing_library() -> dict:
     await db.log(
         'info',
         f'Library scan: {len(complete_ids)} complete, {len(partial_ids)} partial '
-        f'across {scanned_artists} artists ({len(unmatched_dirs)} unmatched dirs)',
+        f'across {scanned_artists} artists ({len(unmatched_dirs)} unmatched, '
+        f'{len(ambiguous)} AI-resolved)',
     )
     return {
-        'scanned_artists': scanned_artists,
-        'matched_albums':  len(complete_ids),  # kept for backward-compat
-        'complete':        len(complete_ids),
-        'partial':         len(partial_ids),
-        'unmatched_dirs':  len(unmatched_dirs),
+        'scanned_artists':  scanned_artists,
+        'matched_albums':   len(complete_ids),  # back-compat
+        'complete':         len(complete_ids),
+        'partial':          len(partial_ids),
+        'unmatched_dirs':   len(unmatched_dirs),
+        'ai_tiebreaks':     len(ambiguous),
     }
 
 
