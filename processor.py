@@ -609,6 +609,7 @@ async def scan_existing_library() -> dict:
         # O(N*M) per artist but N and M are dozens, not thousands.
         candidates: list[tuple[int, str, int, int]] = []  # (score, subdir, album_id, expected)
         subdir_info: dict[str, int] = {}  # subdir -> actual_tracks
+        subdir_tags: dict[str, str] = {}  # subdir -> on-disk album tag (ground truth)
         # Tag-resolved subdirs simply don't produce candidates (loop below
         # adds none when the matched album is already in claimed_album_ids),
         # so the name-resolution pass naturally skips them without a
