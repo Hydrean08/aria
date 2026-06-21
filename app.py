@@ -1,13 +1,32 @@
 import asyncio
+import json
 import os
+import secrets
+import time
+import traceback
 from contextlib import asynccontextmanager
+from datetime import datetime
+
+
+def _fmt_exc(e: BaseException) -> str:
+    """Format an exception for logging — type + repr + traceback.
+    f"{e}" silently logs "" for exceptions with empty str() (timeouts,
+    CancelledError, some httpx errors); this never blackholes a failure."""
+    return f"{type(e).__name__}: {e!r}\n{traceback.format_exc()}"
+
+
+# Updated at the end of each successful cycle so /health can flag silent
+# stalls (e.g. scheduler wedged on a hung await).
+_last_cycle_end: float | None = None
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.middleware.base import BaseHTTPMiddleware
 
+import ai_suggest
 import db
 import processor
 from sources import deezer, spotiflac, spotify
@@ -21,13 +40,18 @@ ARIA_API_KEY = os.getenv('ARIA_API_KEY', '')
 
 _scheduler_task: asyncio.Task | None = None
 _cycle_running = False
+_ai_running = False
+_index_html: str = ''
+
+_INDEX_PATH = Path(__file__).parent / 'static' / 'index.html'
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _scheduler_task
+    global _scheduler_task, _index_html
     await db.init(DB_PATH)
     await deezer.login()
+    _index_html = await asyncio.to_thread(_INDEX_PATH.read_text)
     _scheduler_task = asyncio.create_task(_scheduler())
     yield
     _scheduler_task.cancel()
@@ -38,11 +62,78 @@ app = FastAPI(title='Aria', lifespan=lifespan)
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     if ARIA_API_KEY and request.url.path.startswith("/api/"):
-        if request.headers.get("X-API-Key") != ARIA_API_KEY:
-            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        if request.url.path == "/api/push-token":
+            return await call_next(request)
+        key = request.headers.get("X-API-Key", "")
+        if not secrets.compare_digest(key, ARIA_API_KEY):
+            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
 app.mount('/static', StaticFiles(directory='static'), name='static')
+
+
+_AI_INTERVAL_SECONDS = 7 * 24 * 3600
+
+
+async def _ai_due() -> bool:
+    """Return True if no AI suggestions have been created in the last 7 days."""
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            "SELECT created_at FROM suggestions ORDER BY id DESC LIMIT 1"
+        )).fetchone()
+    if not row:
+        return True
+    last = datetime.fromisoformat(row[0])
+    age = (datetime.now() - last).total_seconds()
+    return age >= _AI_INTERVAL_SECONDS
+
+
+async def _run_ai_tasks():
+    global _ai_running
+    if _ai_running:
+        return
+    _ai_running = True
+    try:
+        async with db.connect() as conn:
+            rows = await (await conn.execute(
+                'SELECT name FROM artists WHERE monitored = 1 ORDER BY name'
+            )).fetchall()
+        names = [r[0] for r in rows]
+        if not names:
+            return
+
+        suggestions = await ai_suggest.suggest_artists(names)
+        if suggestions:
+            async with db.connect() as conn:
+                await conn.executemany(
+                    'INSERT INTO suggestions (artist_name, reason, source_artist) VALUES (?, ?, ?)',
+                    [(s['artist_name'], s['reason'], s['source_artist']) for s in suggestions],
+                )
+                await conn.commit()
+            await db.log('info', f'AI suggested {len(suggestions)} artists')
+
+        playlist = await ai_suggest.build_playlist(names)
+        if playlist:
+            async with db.connect() as conn:
+                await conn.execute(
+                    'INSERT INTO playlists (name, description, track_list) VALUES (?, ?, ?)',
+                    (playlist['name'], playlist['description'], playlist['track_list']),
+                )
+                await conn.commit()
+            await db.log('info', f'AI generated playlist: {playlist["name"]}')
+    finally:
+        _ai_running = False
 
 
 async def _scheduler():
@@ -51,6 +142,11 @@ async def _scheduler():
             await _run_cycle_once()
         except Exception as e:
             await db.log('error', f'Scheduler error: {e}')
+        try:
+            if not _ai_running and await _ai_due():
+                asyncio.create_task(_task(_run_ai_tasks()))
+        except Exception as e:
+            await db.log('error', f'AI task check failed: {e}')
         await asyncio.sleep(INTERVAL)
 
 
@@ -295,6 +391,7 @@ async def stats():
 
 @app.get('/api/logs')
 async def get_logs(limit: int = 200):
+    limit = min(limit, 500)
     async with db.connect() as conn:
         rows = await (await conn.execute(
             'SELECT level, message, created_at FROM logs ORDER BY id DESC LIMIT ?',
@@ -309,6 +406,24 @@ async def get_logs(limit: int = 200):
 async def trigger_cycle():
     asyncio.create_task(_task(_run_cycle_once()))
     return {'queued': True}
+
+
+# ── Push notifications ────────────────────────────────────────────────────────
+
+class PushTokenIn(BaseModel):
+    token: str
+
+
+@app.post('/api/push-token', status_code=204)
+async def register_push_token(body: PushTokenIn):
+    token = body.token.strip()
+    if not token:
+        raise HTTPException(400, 'token required')
+    async with db.connect() as conn:
+        await conn.execute(
+            'INSERT INTO push_tokens(token) VALUES(?) ON CONFLICT(token) DO NOTHING',
+            (token,))
+        await conn.commit()
 
 
 # ── Charts / Recent / Top Tracks ──────────────────────────────────────────────
@@ -460,10 +575,45 @@ async def discover():
     return results[:24]
 
 
+# ── AI Suggestions & Playlists ────────────────────────────────────────────────
+
+@app.get('/api/ai-suggestions')
+async def list_ai_suggestions():
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            'SELECT id, artist_name, reason, source_artist, created_at '
+            'FROM suggestions WHERE dismissed = 0 ORDER BY id DESC'
+        )).fetchall()
+    return [{'id': r[0], 'artist_name': r[1], 'reason': r[2],
+             'source_artist': r[3], 'created_at': r[4]} for r in rows]
+
+
+@app.delete('/api/ai-suggestions/{suggestion_id}', status_code=204)
+async def dismiss_ai_suggestion(suggestion_id: int):
+    async with db.connect() as conn:
+        await conn.execute('UPDATE suggestions SET dismissed = 1 WHERE id = ?', (suggestion_id,))
+        await conn.commit()
+
+
+@app.get('/api/ai-playlists')
+async def list_ai_playlists():
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            'SELECT id, name, description, track_list, created_at FROM playlists ORDER BY id DESC'
+        )).fetchall()
+    return [{'id': r[0], 'name': r[1], 'description': r[2],
+             'tracks': json.loads(r[3] or '[]'), 'created_at': r[4]} for r in rows]
+
+
+@app.post('/api/ai-playlists/generate', status_code=202)
+async def generate_ai_playlist():
+    asyncio.create_task(_task(_run_ai_tasks()))
+    return {'queued': True}
+
+
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
 @app.get('/')
 async def index():
-    html = Path('static/index.html').read_text()
-    injection = f'<script>window._apiKey="{ARIA_API_KEY}";</script>'
-    return HTMLResponse(html.replace('</head>', injection + '</head>', 1))
+    injection = f'<script>window._apiKey={json.dumps(ARIA_API_KEY)};</script>'
+    return HTMLResponse(_index_html.replace('</head>', injection + '</head>', 1))
