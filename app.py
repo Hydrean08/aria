@@ -641,10 +641,21 @@ async def discover():
             'SELECT spotify_id FROM artists WHERE monitored = 1 AND spotify_id IS NOT NULL ORDER BY RANDOM() LIMIT 5'
         )).fetchall()
 
+    # Fetch related artists for all seeds in parallel — was 5 sequential
+    # HTTP calls (~2-5s); now ~1 round-trip. The early "break at 24" exit
+    # is gone (we always do all 5 calls), but the savings on the slow path
+    # outweigh occasionally fetching a few extra results.
+    related_lists = await asyncio.gather(
+        *[spotify.get_related_artists(spotify_id) for (spotify_id,) in seed_rows],
+        return_exceptions=True,
+    )
+
     seen: set[str] = set()
     results = []
-    for (spotify_id,) in seed_rows:
-        for artist in await spotify.get_related_artists(spotify_id):
+    for related in related_lists:
+        if isinstance(related, BaseException):
+            continue
+        for artist in related:
             rid = artist['spotify_id']
             if rid not in known and rid not in seen:
                 seen.add(rid)
