@@ -122,6 +122,91 @@ async def _ai_due() -> bool:
     return age >= _AI_INTERVAL_SECONDS
 
 
+async def _releases_due() -> bool:
+    """Same cadence as suggestions — fire weekly."""
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            "SELECT created_at FROM releases_feed ORDER BY id DESC LIMIT 1"
+        )).fetchone()
+    if not row:
+        return True
+    last = datetime.fromisoformat(row[0])
+    return (datetime.now() - last).total_seconds() >= _AI_INTERVAL_SECONDS
+
+
+_releases_running = False
+
+
+async def _run_releases_watch():
+    """For each monitored artist, fetch their recent Spotify albums and find
+    ones not already in the library. AI-filter the result to the 5 most
+    interesting, store in releases_feed."""
+    global _releases_running
+    if _releases_running:
+        return
+    _releases_running = True
+    try:
+        async with db.connect() as conn:
+            artist_rows = await (await conn.execute(
+                'SELECT name, spotify_id FROM artists '
+                'WHERE monitored = 1 AND spotify_id IS NOT NULL'
+            )).fetchall()
+            existing = {(r[0], r[1]) for r in await (await conn.execute(
+                'SELECT ar.name, al.title FROM albums al '
+                'JOIN artists ar ON ar.id = al.artist_id'
+            )).fetchall()}
+
+        # Parallel fetch — these are read-only Spotify calls.
+        all_albums = await asyncio.gather(*[
+            spotify.get_artist_albums(spotify_id)
+            for (_, spotify_id) in artist_rows
+        ], return_exceptions=True)
+
+        candidates: list[dict] = []
+        cutoff_year = str(datetime.now().year - 1)  # this year + last year only
+        for (artist_name, _), albums in zip(artist_rows, all_albums):
+            if isinstance(albums, BaseException):
+                continue
+            for a in albums:
+                year = (a.get('year') or '')
+                if year < cutoff_year:
+                    continue
+                if (artist_name, a.get('title', '')) in existing:
+                    continue
+                candidates.append({
+                    'artist': artist_name,
+                    'title':  a.get('title', ''),
+                    'year':   year,
+                    'spotify_id': a.get('spotify_id', ''),
+                })
+
+        if not candidates:
+            await db.log('info', 'New-release watch: no new candidates')
+            return
+
+        picks = await ai_suggest.filter_new_releases(candidates)
+        if not picks:
+            await db.log('warn', f'New-release watch: AI filter empty (had {len(candidates)} candidates)')
+            return
+
+        # Resolve back to spotify_id by matching artist+title.
+        by_key = {(c['artist'], c['title']): c for c in candidates}
+        async with db.connect() as conn:
+            for p in picks:
+                cand = by_key.get((p['artist'], p['title']), {})
+                await conn.execute(
+                    'INSERT INTO releases_feed '
+                    '(artist_name, album_title, spotify_id, year, reason) '
+                    'VALUES (?, ?, ?, ?, ?)',
+                    (p['artist'], p['title'], cand.get('spotify_id', ''),
+                     cand.get('year', ''), p['reason']),
+                )
+            await conn.commit()
+        await db.log('info', f'New-release watch: stored {len(picks)} highlights')
+    finally:
+        _releases_running = False
+
+
 async def _run_ai_tasks():
     global _ai_running
     if _ai_running:
