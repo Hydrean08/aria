@@ -63,9 +63,35 @@ async def lifespan(app: FastAPI):
             'until this is fixed.',
         )
     _index_html = await asyncio.to_thread(_INDEX_PATH.read_text)
+    # First-run library import: if the user has 0 'complete' albums but the
+    # DB is populated, they almost certainly have an existing collection on
+    # disk that Aria hasn't matched. Run the scan once in the background so
+    # the album counts populate immediately on first cycle. Subsequent boots
+    # short-circuit (the count > 0 check) so this stays a one-shot.
+    asyncio.create_task(_task(_first_run_import()))
     _scheduler_task = asyncio.create_task(_scheduler())
     yield
     _scheduler_task.cancel()
+
+
+async def _first_run_import():
+    """Auto-run the existing-library scan once when the DB looks 'fresh'
+    (any albums tracked, none complete). No-op otherwise."""
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            "SELECT "
+            " (SELECT COUNT(*) FROM albums) AS total, "
+            " (SELECT COUNT(*) FROM albums WHERE status='complete') AS done"
+        )).fetchone()
+    total, done = row[0] or 0, row[1] or 0
+    if total > 0 and done == 0:
+        await db.log('info', 'First-run library scan starting (DB has albums but none complete)')
+        try:
+            result = await processor.scan_existing_library()
+            if result.get('matched_albums', 0) > 0:
+                asyncio.create_task(_task(processor.plex.scan_music_library()))
+        except Exception as e:
+            await db.log('error', f'First-run scan failed: {_fmt_exc(e)}')
 
 
 app = FastAPI(title='Aria', lifespan=lifespan)
