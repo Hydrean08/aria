@@ -625,7 +625,12 @@ async def scan_existing_library() -> dict:
                         ],
                     })
                 else:
-                    unmatched_dirs.append(f'{artist_name}/{subdir} (low-confidence)')
+                    # Single weak candidate — record but flag the reason so
+                    # this can be distinguished from a folder with no DB
+                    # match at all when surfacing to the user.
+                    unmatched_dirs.append(
+                        f'{artist_name}/{subdir} (best score {top_score} < {CONFIDENT_SCORE})'
+                    )
                 continue
 
             if len(top_picks) == 1:
