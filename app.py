@@ -701,6 +701,90 @@ async def generate_ai_playlist():
     return {'queued': True}
 
 
+@app.delete('/api/ai-playlists/{playlist_id}', status_code=204)
+async def delete_ai_playlist(playlist_id: int):
+    async with db.connect() as conn:
+        await conn.execute('DELETE FROM playlists WHERE id = ?', (playlist_id,))
+        await conn.commit()
+
+
+class MoodIn(BaseModel):
+    mood: str
+
+
+@app.post('/api/ai-playlists/mood', status_code=202)
+async def generate_mood_playlist(body: MoodIn):
+    """Free-text mood/theme → custom playlist. Returns immediately; result
+    lands in the playlists table once GLM-4 responds (~5-30s)."""
+    mood = (body.mood or '').strip()
+    if not mood:
+        raise HTTPException(400, 'mood is required')
+
+    async def _run_mood():
+        async with db.connect() as conn:
+            rows = await (await conn.execute(
+                'SELECT name FROM artists WHERE monitored = 1'
+            )).fetchall()
+        names = [r[0] for r in rows]
+        playlist = await ai_suggest.build_mood_playlist(names, mood)
+        if not playlist:
+            await db.log('warn', f'AI mood playlist failed: {mood!r}')
+            return
+        async with db.connect() as conn:
+            await conn.execute(
+                'INSERT INTO playlists (name, description, track_list) VALUES (?, ?, ?)',
+                (playlist['name'], playlist['description'], playlist['track_list']),
+            )
+            await conn.commit()
+        await db.log('info', f'AI mood playlist: {playlist["name"]!r}')
+
+    asyncio.create_task(_task(_run_mood()))
+    return {'queued': True, 'mood': mood}
+
+
+@app.get('/api/ai-digest')
+async def ai_digest():
+    """Returns a fresh narrative about the library. Synchronous — caller
+    waits for GLM-4 (~5-15s). Cache on the client if needed."""
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            'SELECT name FROM artists WHERE monitored = 1'
+        )).fetchall()
+    names = [r[0] for r in rows]
+    narrative = await ai_suggest.library_digest(names)
+    if not narrative:
+        return {'digest': None, 'error': 'AI unavailable'}
+    return {'digest': narrative}
+
+
+class LyricSearchIn(BaseModel):
+    query: str
+
+
+@app.post('/api/ai-lyric-search')
+async def ai_lyric_search(body: LyricSearchIn):
+    """Free-text → up to 10 track suggestions with reasons."""
+    q = (body.query or '').strip()
+    if not q:
+        raise HTTPException(400, 'query is required')
+    results = await ai_suggest.lyric_search(q)
+    return {'query': q, 'results': results}
+
+
+@app.post('/api/artists/{artist_id}/auto-genres')
+async def artist_auto_genres(artist_id: int):
+    """AI-inferred canonical genre tags for an artist. Returns the list; does
+    NOT persist (no genres column yet — surface to caller for filtering UI)."""
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            'SELECT name FROM artists WHERE id = ?', (artist_id,)
+        )).fetchone()
+    if not row:
+        raise HTTPException(404, 'artist not found')
+    tags = await ai_suggest.auto_genres(row[0])
+    return {'artist': row[0], 'genres': tags}
+
+
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
 @app.get('/')
