@@ -393,6 +393,130 @@ async def retry_album(album_id: int):
         await plex.scan_music_library()
 
 
+async def scan_existing_library() -> dict:
+    """Walk MUSIC_DIR, match {Artist}/{Album}/ folders against the albums
+    table, and mark matches as 'complete' so users with a pre-existing
+    library aren't shown 0/N when they actually have content on disk.
+
+    Only ever flips albums FROM 'missing' to 'complete' — never overwrites
+    a 'partial', 'failed', or already-complete record (those represent real
+    Aria-managed state). Idempotent — safe to re-run.
+
+    Returns {'scanned_artists', 'matched_albums', 'unmatched_dirs'} for the
+    caller to surface.
+    """
+    if not os.path.isdir(MUSIC_DIR):
+        return {'scanned_artists': 0, 'matched_albums': 0, 'unmatched_dirs': 0,
+                'error': f'MUSIC_DIR not found: {MUSIC_DIR}'}
+
+    audio_exts = ('.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus')
+
+    def _norm(s: str) -> str:
+        """Lossy normalization for fuzzy matching — strips punctuation,
+        lowercases, collapses whitespace. Lets "Awake (Deluxe Edition)"
+        match "Awake-Deluxe-Edition" or "Awake_DeluxeEdition" if needed."""
+        if not s:
+            return ''
+        return re.sub(r'[^a-z0-9]+', '', s.lower())
+
+    async with db.connect() as conn:
+        artist_rows = await (await conn.execute(
+            'SELECT id, name FROM artists'
+        )).fetchall()
+        album_rows = await (await conn.execute(
+            "SELECT id, artist_id, title FROM albums WHERE status = 'missing'"
+        )).fetchall()
+
+    # Group missing albums by artist for cheap per-artist lookup.
+    albums_by_artist: dict[int, list[tuple[int, str, str]]] = {}
+    for album_id, artist_id, title in album_rows:
+        albums_by_artist.setdefault(artist_id, []).append(
+            (album_id, title, _norm(title))
+        )
+
+    matched_ids: list[int] = []
+    unmatched_dirs: list[str] = []
+    scanned_artists = 0
+
+    for artist_id, artist_name in artist_rows:
+        # Aria writes Artist/ as safe_name(artist_name) — match that first,
+        # then fall back to the raw artist name in case the user organized
+        # things slightly differently before Aria existed.
+        candidate_dirs = [
+            os.path.join(MUSIC_DIR, safe_name(artist_name)),
+            os.path.join(MUSIC_DIR, artist_name),
+        ]
+        artist_dir = next((d for d in candidate_dirs if os.path.isdir(d)), None)
+        if not artist_dir:
+            continue
+        scanned_artists += 1
+
+        try:
+            subdirs = [d for d in os.listdir(artist_dir)
+                       if os.path.isdir(os.path.join(artist_dir, d))]
+        except OSError:
+            continue
+
+        artist_albums = albums_by_artist.get(artist_id, [])
+        if not artist_albums:
+            # Artist exists on disk + DB, but no missing albums to match.
+            continue
+
+        for subdir in subdirs:
+            full = os.path.join(artist_dir, subdir)
+            # Skip empty folders + folders with no audio.
+            try:
+                has_audio = any(
+                    f.lower().endswith(audio_exts)
+                    for f in os.listdir(full)
+                )
+            except OSError:
+                has_audio = False
+            if not has_audio:
+                continue
+
+            subdir_norm = _norm(subdir)
+            # Exact-normalized match first (Skillet/Alien Youth → "Alien Youth").
+            # Then substring fallback so "Awake-Deluxe" matches "Awake (Deluxe Edition)".
+            picked = None
+            for album_id, title, title_norm in artist_albums:
+                if subdir_norm == title_norm:
+                    picked = album_id
+                    break
+            if picked is None:
+                for album_id, title, title_norm in artist_albums:
+                    if title_norm and (title_norm in subdir_norm or subdir_norm in title_norm):
+                        picked = album_id
+                        break
+            if picked is not None:
+                matched_ids.append(picked)
+            else:
+                unmatched_dirs.append(f'{artist_name}/{subdir}')
+
+    if matched_ids:
+        async with db.connect() as conn:
+            # Mark these albums complete + record source so the UI can show
+            # "imported" vs "downloaded" later if we want to surface it.
+            placeholders = ','.join('?' * len(matched_ids))
+            await conn.execute(
+                f"UPDATE albums SET status='complete', source='existing', "
+                f"updated_at=datetime('now') WHERE id IN ({placeholders})",
+                matched_ids,
+            )
+            await conn.commit()
+
+    await db.log(
+        'info',
+        f'Library scan: matched {len(matched_ids)} albums across '
+        f'{scanned_artists} artists ({len(unmatched_dirs)} unmatched dirs)',
+    )
+    return {
+        'scanned_artists': scanned_artists,
+        'matched_albums':  len(matched_ids),
+        'unmatched_dirs':  len(unmatched_dirs),
+    }
+
+
 async def run_cycle():
     await db.log('info', 'Cycle started')
 
