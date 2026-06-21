@@ -633,14 +633,14 @@ async def scan_existing_library() -> dict:
                     picked_id = free[pick_idx]['album_id']
 
                 claimed_album_ids.add(picked_id)
-                # Look up track_count + actual tracks for classification.
                 actual_tracks = amb['actual_tracks']
-                expected = 0
-                for artist_id, _name in artist_rows:
-                    for aid, _t, _tn, tc in albums_by_artist.get(artist_id, []):
-                        if aid == picked_id:
-                            expected = tc
-                            break
+                # Pull expected straight off the candidate dict — already
+                # stashed when we recorded the ambiguity, no need to walk
+                # albums_by_artist again.
+                expected = next(
+                    (c['expected'] for c in amb['candidates'] if c['album_id'] == picked_id),
+                    0,
+                )
                 if expected > 0 and actual_tracks >= expected:
                     complete_ids.append(picked_id)
                 elif expected > 0:
