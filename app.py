@@ -571,6 +571,25 @@ async def get_logs(limit: int = 200):
 
 # ── Cycle control ─────────────────────────────────────────────────────────────
 
+@app.post('/api/scan-existing', status_code=200)
+async def scan_existing():
+    """Walk MUSIC_DIR + match {Artist}/{Album}/ folders against the albums
+    table. Marks matched albums as 'complete' so users with a pre-existing
+    library aren't shown 0/N. Synchronous — fast even on large libraries
+    (filesystem walk + DB updates, no network).
+
+    Returns counts so the caller can show a result like "matched 2 albums
+    across 6 artists (15 unmatched dirs)"."""
+    result = await processor.scan_existing_library()
+    if 'error' in result:
+        raise HTTPException(400, result['error'])
+    # If anything changed, trigger a Plex scan so the library shows the
+    # newly-marked-complete content immediately.
+    if result['matched_albums'] > 0:
+        asyncio.create_task(_task(processor.plex.scan_music_library()))
+    return result
+
+
 @app.post('/api/cycle/run', status_code=202)
 async def trigger_cycle():
     asyncio.create_task(_task(_run_cycle_once()))
