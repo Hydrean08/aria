@@ -554,7 +554,7 @@ async def scan_existing_library() -> dict:
                 continue  # empty folders can't be matches
             subdir_info[subdir] = actual_tracks
             subdir_norm = _norm(subdir)
-            for album_id, title, title_norm, track_count in artist_albums:
+            for album_id, title, title_norm, track_count, _status in artist_albums:
                 s = _score(subdir_norm, title_norm)
                 if s > 0:
                     candidates.append((s, subdir, album_id, track_count))
