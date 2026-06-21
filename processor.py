@@ -596,7 +596,7 @@ async def scan_existing_library() -> dict:
                 # Even at score 100 this is wrong to auto-resolve — two
                 # albums normalize-equal means the DB has duplicates or
                 # one is e.g. a remaster of the other. Defer to AI.
-                lookup = {a[0]: (a[1], a[3]) for a in artist_albums}  # id -> (title, track_count)
+                lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}  # id -> (title, track_count, status)
                 ambiguous.append({
                     'artist_name': artist_name,
                     'subdir': subdir,
@@ -604,8 +604,9 @@ async def scan_existing_library() -> dict:
                     'candidates': [
                         {
                             'album_id': aid,
-                            'title':    lookup.get(aid, ('?', 0))[0],
-                            'expected': lookup.get(aid, ('?', 0))[1],
+                            'title':    lookup.get(aid, ('?', 0, 'missing'))[0],
+                            'expected': lookup.get(aid, ('?', 0, 'missing'))[1],
+                            'status':   lookup.get(aid, ('?', 0, 'missing'))[2],
                         }
                         for aid in top_picks
                     ],
