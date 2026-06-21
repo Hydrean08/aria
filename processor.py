@@ -729,22 +729,11 @@ async def scan_existing_library() -> dict:
                 # original-vs-variant case worth disambiguating). If only
                 # one weak candidate exists, don't risk it — unmatched.
                 if len(ties) >= 2:
-                    lookup = {a[0]: (a[1], a[3], a[4]) for a in artist_albums}
-                    ambiguous.append({
-                        'artist_name': artist_name,
-                        'subdir': subdir,
-                        'tag': subdir_tags.get(subdir),  # tier-1 ground truth, if any
-                        'actual_tracks': actual_tracks,
-                        'candidates': [
-                            {
-                                'album_id': aid,
-                                'title':    lookup.get(aid, ('?', 0, 'missing'))[0],
-                                'expected': lookup.get(aid, ('?', 0, 'missing'))[1],
-                                'status':   lookup.get(aid, ('?', 0, 'missing'))[2],
-                            }
-                            for _s, aid in ties[:5]  # cap at top 5 to keep prompt small
-                        ],
-                    })
+                    _record_ambiguity(
+                        subdir,
+                        [aid for _s, aid in ties[:5]],  # cap at top 5 to keep prompt small
+                        actual_tracks,
+                    )
                 else:
                     # Single weak candidate — record but flag the reason so
                     # this can be distinguished from a folder with no DB
