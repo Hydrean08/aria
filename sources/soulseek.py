@@ -156,7 +156,7 @@ async def queue_download(result: dict, artist: str, title: str) -> list[str]:
     return []
 
 
-async def wait_for_downloads(filenames: list[str], timeout: int = 600) -> bool:
+async def wait_for_downloads(filenames: list[str], timeout: int = 150) -> bool:
     if not filenames:
         return True
     deadline = time.monotonic() + timeout

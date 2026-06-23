@@ -30,7 +30,7 @@ def _search_browse_id(artist: str, album: str) -> str | None:
 
 async def search_album(artist: str, album: str) -> str | None:
     """Return a YouTube Music album browseId, or None if not found."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, _search_browse_id, artist, album)
     except Exception:
@@ -90,7 +90,7 @@ def _download_browse_id(browse_id: str, dest: str, artist: str, album: str) -> l
 
 async def download_album(browse_id: str, dest: str, artist: str, album: str) -> list[str]:
     """Download all tracks for a browseId into dest. Returns list of file paths."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         return await loop.run_in_executor(None, _download_browse_id, browse_id, dest, artist, album)
     except Exception:
