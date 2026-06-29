@@ -987,7 +987,46 @@ async def artist_auto_genres(artist_id: int):
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
+_LOGIN_HTML = """<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Aria — Sign in</title>
+<style>body{background:#0d0d0f;color:#eee;font-family:system-ui,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0}
+form{background:#17171b;padding:32px;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);width:300px}
+h1{font-size:18px;margin:0 0 16px}input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #333;background:#0d0d0f;color:#eee;margin-bottom:12px}
+button{width:100%;padding:10px;border:0;border-radius:8px;background:#1db954;color:#fff;font-weight:600;cursor:pointer}.err{color:#f55;font-size:13px;min-height:18px}</style></head>
+<body><form onsubmit="go(event)"><h1>Aria</h1><input id="k" type="password" placeholder="API key" autofocus>
+<div class="err" id="e"></div><button>Sign in</button></form>
+<script>async function go(ev){ev.preventDefault();const k=document.getElementById('k').value;
+const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
+if(r.ok){location.reload()}else{document.getElementById('e').textContent=r.status===429?'Too many attempts':'Invalid key'}}</script>
+</body></html>"""
+
+
+@app.post('/api/auth')
+async def auth_login(request: Request):
+    """Validate the API key and set an HttpOnly session cookie (browser login)."""
+    if not ARIA_API_KEY:
+        return JSONResponse({'ok': True})
+    if _rate_limited('auth:' + _client_ip(request), 5, 60):
+        raise HTTPException(429, 'Too many attempts — try again shortly')
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, 'Invalid JSON')
+    if not secrets.compare_digest(str(body.get('key', '')), ARIA_API_KEY):
+        raise HTTPException(401, 'Invalid key')
+    resp = JSONResponse({'ok': True})
+    # Secure flag when served over HTTPS (tunnel); off for plain-HTTP LAN access.
+    secure = request.headers.get('x-forwarded-proto', request.url.scheme) == 'https'
+    resp.set_cookie('aria_session', ARIA_API_KEY, httponly=True, samesite='strict', path='/', secure=secure)
+    return resp
+
+
 @app.get('/')
-async def index():
-    injection = f'<script>window._apiKey={json.dumps(ARIA_API_KEY)};</script>'
-    return HTMLResponse(_index_html.replace('</head>', injection + '</head>', 1))
+async def index(request: Request):
+    # Gate the SPA behind the key so the page never ships the credential to
+    # unauthenticated visitors. Browsers authenticate via the aria_session cookie.
+    if ARIA_API_KEY:
+        cookie = request.cookies.get('aria_session', '')
+        if not secrets.compare_digest(cookie, ARIA_API_KEY):
+            return HTMLResponse(_LOGIN_HTML)
+    return HTMLResponse(_index_html)
