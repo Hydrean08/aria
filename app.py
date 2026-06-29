@@ -110,13 +110,35 @@ async def _first_run_import():
 
 app = FastAPI(title='Aria', lifespan=lifespan)
 
+# Simple in-memory per-bucket sliding-window rate limiter (no external dep).
+_rate_buckets: dict = {}
+
+def _client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for", "")
+    return xff.split(",")[0].strip() if xff else (request.client.host if request.client else "?")
+
+def _rate_limited(bucket: str, limit: int, window: float) -> bool:
+    now = time.time()
+    q = [t for t in _rate_buckets.get(bucket, []) if now - t < window]
+    if len(q) >= limit:
+        _rate_buckets[bucket] = q
+        return True
+    q.append(now)
+    _rate_buckets[bucket] = q
+    return False
+
+# /api/auth (login) and /api/push-token (mobile registration) are reachable
+# without the API key; both do their own validation + rate limiting below.
+_OPEN_API_PATHS = ("/api/auth", "/api/push-token")
+
 @app.middleware("http")
 async def api_key_middleware(request: Request, call_next):
     if ARIA_API_KEY and request.url.path.startswith("/api/"):
-        if request.url.path == "/api/push-token":
+        if request.url.path in _OPEN_API_PATHS:
             return await call_next(request)
-        key = request.headers.get("X-API-Key", "")
-        if not secrets.compare_digest(key, ARIA_API_KEY):
+        # Accept the key via header (API/mobile clients) or session cookie (browser).
+        provided = request.headers.get("X-API-Key", "") or request.cookies.get("aria_session", "")
+        if not secrets.compare_digest(provided, ARIA_API_KEY):
             return JSONResponse({"detail": "Unauthorized"}, status_code=401)
     return await call_next(request)
 
