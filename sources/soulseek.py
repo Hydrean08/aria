@@ -5,7 +5,7 @@ import uuid
 import httpx
 
 SLSKD_URL     = os.getenv('SLSKD_URL', 'http://slskd:5030')
-SLSKD_API_KEY = os.getenv('SLSKD_API_KEY', 'slskd-soularr-api-key')
+SLSKD_API_KEY = os.getenv('SLSKD_API_KEY', '')  # no default: a shared placeholder key is a credential
 
 _session: httpx.AsyncClient | None = None
 
