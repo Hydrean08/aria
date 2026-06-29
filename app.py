@@ -664,11 +664,18 @@ class PushTokenIn(BaseModel):
     token: str
 
 
+_EXPO_TOKEN_RE = re.compile(r'^(ExponentPushToken|ExpoPushToken)\[[A-Za-z0-9_-]+\]$')
+
+
 @app.post('/api/push-token', status_code=204)
-async def register_push_token(body: PushTokenIn):
+async def register_push_token(body: PushTokenIn, request: Request):
+    # Unauthenticated endpoint: strictly validate + rate-limit so it can't be
+    # used to flood the table or inject arbitrary strings into push delivery.
     token = body.token.strip()
-    if not token:
-        raise HTTPException(400, 'token required')
+    if not _EXPO_TOKEN_RE.match(token) or len(token) > 200:
+        raise HTTPException(400, 'invalid push token')
+    if _rate_limited('push:' + _client_ip(request), 10, 60):
+        raise HTTPException(429, 'rate limited')
     async with db.connect() as conn:
         await conn.execute(
             'INSERT INTO push_tokens(token) VALUES(?) ON CONFLICT(token) DO NOTHING',
