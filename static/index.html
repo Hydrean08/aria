@@ -1065,8 +1065,11 @@ async function loadStats() {
   function renderHero(artist) {
     const hero = document.getElementById('artist-hero');
     const large = bigImg(artist.image_url);
-    if (large) {
-      hero.style.backgroundImage = `url('${large}')`;
+    // Only allow plain http(s) URLs into the CSS url() to prevent CSS injection.
+    let safeUrl = '';
+    try { const u = new URL(large); if (u.protocol === 'https:' || u.protocol === 'http:') safeUrl = u.href; } catch (e) {}
+    if (safeUrl) {
+      hero.style.backgroundImage = `url("${encodeURI(safeUrl)}")`;
     } else {
       hero.style.backgroundImage = '';
       hero.style.background = 'linear-gradient(135deg, #1e1b4b, var(--surface2))';
