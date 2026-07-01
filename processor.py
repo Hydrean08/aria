@@ -150,15 +150,7 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
                 'record_type': dz.get('record_type', 'album') if dz else 'album',
             })
     elif deezer_albums:
-        to_insert = [{
-            'title':       a['title'],
-            'year':        (a.get('release_date') or '')[:4],
-            'spotify_id':  None,
-            'deezer_id':   str(a['id']),
-            'track_count': a.get('nb_tracks', 0),
-            'cover_url':   a.get('cover_medium'),
-            'record_type': a.get('record_type', 'album'),
-        } for a in deezer_albums]
+        to_insert = [_deezer_entry(a) for a in deezer_albums]
     else:
         await db.log('warn', f'No catalog found for {artist_name}')
         return
