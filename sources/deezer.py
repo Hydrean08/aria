@@ -209,6 +209,16 @@ async def get_top_tracks(deezer_artist_id: str, limit: int = 5) -> list[dict]:
         return []
 
 
+async def get_album_nb_tracks(deezer_album_id: str) -> int:
+    """Track count for a single album. The /artist/{id}/albums listing omits
+    nb_tracks, so Deezer-sourced albums need this to know their real size."""
+    try:
+        r = await _client().get(f'{DEEZER_API}/album/{deezer_album_id}')
+        return int(r.json().get('nb_tracks') or 0)
+    except Exception:
+        return 0
+
+
 async def get_album_tracks(deezer_album_id: str) -> list[dict]:
     try:
         r = await _client().get(
