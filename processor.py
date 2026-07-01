@@ -152,6 +152,27 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
         await db.log('warn', f'No catalog found for {artist_name}')
         return
 
+    # Union in Deezer-only releases the primary source never listed. Deezer is
+    # the download source, so a Deezer-only album is fully obtainable yet was
+    # previously invisible (e.g. EPs/singles Spotify omits). Dedup by normalized
+    # title against what the primary source already contributed.
+    if deezer_albums and (sp_albums or mb_albums):
+        have_titles = {i['title'].lower().strip() for i in to_insert}
+        for a in deezer_albums:
+            key = a['title'].lower().strip()
+            if key in have_titles:
+                continue
+            have_titles.add(key)
+            to_insert.append({
+                'title':       a['title'],
+                'year':        (a.get('release_date') or '')[:4],
+                'spotify_id':  None,
+                'deezer_id':   str(a['id']),
+                'track_count': a.get('nb_tracks', 0),
+                'cover_url':   a.get('cover_medium'),
+                'record_type': a.get('record_type', 'album'),
+            })
+
     async with db.connect() as conn:
         row = await (await conn.execute(
             'SELECT id FROM artists WHERE name = ?', (artist_name,)
