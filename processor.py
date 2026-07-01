@@ -168,6 +168,17 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
             have_titles.add(key)
             to_insert.append(_deezer_entry(a))
 
+    # Deezer's artist-albums listing omits nb_tracks, so any Deezer-sourced
+    # entry lands with track_count 0. Backfill real counts concurrently so the
+    # UI and the download classifier see a correct expected size.
+    needs_count = [e for e in to_insert if e['deezer_id'] and not e['track_count']]
+    if needs_count:
+        counts = await asyncio.gather(
+            *(deezer.get_album_nb_tracks(e['deezer_id']) for e in needs_count)
+        )
+        for entry, count in zip(needs_count, counts):
+            entry['track_count'] = count
+
     async with db.connect() as conn:
         row = await (await conn.execute(
             'SELECT id FROM artists WHERE name = ?', (artist_name,)
