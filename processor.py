@@ -166,15 +166,7 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
             if key in have_titles:
                 continue
             have_titles.add(key)
-            to_insert.append({
-                'title':       a['title'],
-                'year':        (a.get('release_date') or '')[:4],
-                'spotify_id':  None,
-                'deezer_id':   str(a['id']),
-                'track_count': a.get('nb_tracks', 0),
-                'cover_url':   a.get('cover_medium'),
-                'record_type': a.get('record_type', 'album'),
-            })
+            to_insert.append(_deezer_entry(a))
 
     async with db.connect() as conn:
         row = await (await conn.execute(
