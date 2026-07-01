@@ -112,6 +112,17 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
             if key.startswith(prefix):
                 deezer_by_title[key[len(prefix):]] = a
 
+    def _deezer_entry(a: dict) -> dict:
+        return {
+            'title':       a['title'],
+            'year':        (a.get('release_date') or '')[:4],
+            'spotify_id':  None,
+            'deezer_id':   str(a['id']),
+            'track_count': a.get('nb_tracks', 0),
+            'cover_url':   a.get('cover_medium'),
+            'record_type': a.get('record_type', 'album'),
+        }
+
     if sp_albums:
         to_insert = []
         for sa in sp_albums:
