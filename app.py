@@ -415,7 +415,10 @@ async def list_artists():
                    SUM(CASE WHEN al.status = 'missing'     THEN 1 ELSE 0 END) AS album_missing,
                    SUM(CASE WHEN al.status = 'error'       THEN 1 ELSE 0 END) AS album_error,
                    SUM(CASE WHEN al.status = 'downloading' THEN 1 ELSE 0 END) AS album_downloading,
-                   SUM(CASE WHEN al.status = 'partial'     THEN 1 ELSE 0 END) AS album_partial
+                   SUM(CASE WHEN al.status = 'partial'     THEN 1 ELSE 0 END) AS album_partial,
+                   SUM(CASE WHEN al.record_type = 'album'  THEN 1 ELSE 0 END) AS n_albums,
+                   SUM(CASE WHEN al.record_type = 'ep'     THEN 1 ELSE 0 END) AS n_eps,
+                   SUM(CASE WHEN al.record_type = 'single' THEN 1 ELSE 0 END) AS n_singles
             FROM artists a
             LEFT JOIN albums al ON al.artist_id = a.id
             GROUP BY a.id
@@ -425,7 +428,8 @@ async def list_artists():
              'added_at': r[4], 'mb_id': r[5], 'image_url': r[6],
              'album_total': r[7], 'album_done': r[8],
              'album_missing': r[9], 'album_error': r[10],
-             'album_downloading': r[11], 'album_partial': r[12]}
+             'album_downloading': r[11], 'album_partial': r[12],
+             'n_albums': r[13], 'n_eps': r[14], 'n_singles': r[15]}
             for r in rows]
 
 
