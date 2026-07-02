@@ -605,14 +605,14 @@ async def set_all_albums_wanted(artist_id: int, wanted: bool, types: str = ''):
     async with db.connect() as conn:
         if requested:
             placeholders = ','.join('?' for _ in requested)
-            await conn.execute(
+            cur = await conn.execute(
                 f'''UPDATE albums SET wanted = ?
                     WHERE artist_id = ? AND is_variant = 0 AND record_type IN ({placeholders})''',
                 (int(wanted), artist_id, *requested)
             )
         else:
-            await conn.execute('UPDATE albums SET wanted = ? WHERE artist_id = ?', (int(wanted), artist_id))
-        affected = conn.total_changes
+            cur = await conn.execute('UPDATE albums SET wanted = ? WHERE artist_id = ?', (int(wanted), artist_id))
+        affected = cur.rowcount
         await conn.commit()
     return {'wanted': wanted, 'types': requested, 'updated': affected}
 
