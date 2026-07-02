@@ -287,6 +287,8 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
                          track_count: int, year: str) -> bool:
     await db.log('info', f'Processing: {artist_name} — {album_title}')
     await _update_album(album_id, status='downloading')
+    download_id = await db.download_create('album', artist_name, album_title, album_title)
+    await db.download_update(download_id, 'downloading')
 
     dest      = _dest_dir(artist_name, album_title)
     files: list[str] = []
