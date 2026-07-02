@@ -94,6 +94,10 @@ async def _migrate(conn):
             created_at  TEXT    DEFAULT (datetime('now'))
         )''',
         'ALTER TABLE albums ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0',
+        # Marks alternate versions/remixes and guest-feature credits so they
+        # don't inflate the primary Albums/EPs/Singles counts. Non-destructive
+        # — the rows stay, just grouped separately in the UI.
+        'ALTER TABLE albums ADD COLUMN is_variant INTEGER NOT NULL DEFAULT 0',
         # Per-item download activity feed. Powers the Downloads view in the
         # Arion app so single-track "want" downloads (previously fire-and-forget
         # with no visible state) can be tracked queued → downloading → done.
