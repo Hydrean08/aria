@@ -222,36 +222,38 @@ async def sync_artist(artist_name: str, deezer_id: str | None):
             await conn.execute('UPDATE artists SET mb_id=? WHERE id=?', (mbid, artist_id))
 
         for album in to_insert:
+            variant = _is_variant(album['title'], artist_name)
             if album['deezer_id']:
                 await conn.execute(
                     '''UPDATE OR IGNORE albums
                        SET deezer_id=?, spotify_id=coalesce(?,spotify_id),
-                           year=?, track_count=?, cover_url=?, record_type=?
+                           year=?, track_count=?, cover_url=?, record_type=?, is_variant=?
                        WHERE artist_id=? AND title=? AND (deezer_id IS NULL OR deezer_id=?)''',
                     (album['deezer_id'], album['spotify_id'], album['year'],
-                     album['track_count'], album['cover_url'], album['record_type'],
+                     album['track_count'], album['cover_url'], album['record_type'], variant,
                      artist_id, album['title'], album['deezer_id'])
                 )
                 await conn.execute(
                     '''INSERT OR IGNORE INTO albums
-                       (artist_id, title, year, deezer_id, spotify_id, track_count, cover_url, record_type, wanted)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)''',
+                       (artist_id, title, year, deezer_id, spotify_id, track_count, cover_url, record_type, is_variant, wanted)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)''',
                     (artist_id, album['title'], album['year'], album['deezer_id'],
-                     album['spotify_id'], album['track_count'], album['cover_url'], album['record_type'])
+                     album['spotify_id'], album['track_count'], album['cover_url'], album['record_type'], variant)
                 )
             else:
                 await conn.execute(
                     '''INSERT INTO albums
-                       (artist_id, title, year, spotify_id, track_count, cover_url, record_type, wanted)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                       (artist_id, title, year, spotify_id, track_count, cover_url, record_type, is_variant, wanted)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
                        ON CONFLICT(artist_id, title) DO UPDATE SET
                            year        = excluded.year,
                            spotify_id  = coalesce(excluded.spotify_id, albums.spotify_id),
                            track_count = excluded.track_count,
                            cover_url   = coalesce(excluded.cover_url, albums.cover_url),
-                           record_type = excluded.record_type''',
+                           record_type = excluded.record_type,
+                           is_variant  = excluded.is_variant''',
                     (artist_id, album['title'], album['year'], album['spotify_id'],
-                     album['track_count'], album['cover_url'], album['record_type'])
+                     album['track_count'], album['cover_url'], album['record_type'], variant)
                 )
         try:
             await conn.commit()
