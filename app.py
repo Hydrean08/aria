@@ -787,17 +787,53 @@ class TrackIn(BaseModel):
     year: str = ''
 
 
+async def _run_track_download(download_id: int, body: 'TrackIn'):
+    """Resolve the best source for a single track and download it, recording
+    lifecycle state in the downloads feed so Arion can show live progress.
+
+    Order: Deezer id (reliable) → Spotify id resolved to Deezer via ISRC →
+    SpotiFLAC via the Spotify URL (last resort — flaky, no status of its own)."""
+    dest = os.path.join(_MUSIC_DIR, _safe_name(body.artist), _safe_name(body.album))
+    await db.download_update(download_id, 'downloading')
+
+    deezer_id = body.track_id if body.track_id.isdigit() else None
+    if not deezer_id:
+        isrc = await spotify.get_track_isrc(body.track_id)
+        if isrc:
+            deezer_id = await deezer.track_by_isrc(isrc)
+
+    if deezer_id:
+        path = await deezer.download_track(
+            deezer_id, dest, body.title, body.artist, body.album, body.track_num, body.year,
+        )
+        if path:
+            await db.download_update(download_id, 'done', source='deezer')
+            return
+
+    if not body.track_id.isdigit():
+        files = await spotiflac.download_track_spotify(body.track_id, dest)
+        if files:
+            await db.download_update(download_id, 'done', source='spotiflac')
+            return
+
+    await db.download_update(download_id, 'failed', error='No source could fetch this track')
+    await db.log('warn', f'Track download failed: {body.artist} — {body.title}')
+
+
 @app.post('/api/tracks/download', status_code=202)
 async def download_single_track(body: TrackIn):
-    dest = os.path.join(_MUSIC_DIR, _safe_name(body.artist), _safe_name(body.album))
+    download_id = await db.download_create('track', body.artist, body.album, body.title)
     await db.log('info', f'Queueing track: {body.artist} — {body.title}')
-    if body.track_id.isdigit():
-        asyncio.create_task(_task(deezer.download_track(
-            body.track_id, dest, body.title, body.artist, body.album, body.track_num, body.year,
-        )))
-    else:
-        asyncio.create_task(_task(spotiflac.download_track_spotify(body.track_id, dest)))
-    return {'queued': True}
+
+    async def _job():
+        try:
+            await _run_track_download(download_id, body)
+        except Exception as e:
+            await db.download_update(download_id, 'failed', error=_fmt_exc(e))
+            raise
+
+    asyncio.create_task(_task(_job()))
+    return {'queued': True, 'download_id': download_id}
 
 
 # ── Discovery ─────────────────────────────────────────────────────────────────
