@@ -228,6 +228,18 @@ async def get_album_tracks(spotify_id: str) -> list[dict]:
         return []
 
 
+async def get_track_isrc(spotify_id: str) -> str | None:
+    """ISRC for a Spotify track — lets us resolve it to the same recording on
+    Deezer (the reliable download source) instead of the flaky SpotiFLAC path."""
+    if not _have_creds():
+        return None
+    try:
+        data = await _get(f"/tracks/{spotify_id}")
+        return (data.get("external_ids") or {}).get("isrc")
+    except Exception:
+        return None
+
+
 async def search_album(artist_name: str, album_title: str) -> str | None:
     if not _have_creds():
         return None
