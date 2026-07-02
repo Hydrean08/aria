@@ -631,6 +631,26 @@ async def get_logs(limit: int = 200):
     return [{'level': r[0], 'message': r[1], 'at': r[2]} for r in rows]
 
 
+@app.get('/api/downloads')
+async def get_downloads(limit: int = 100):
+    """Recent download activity for the Arion Downloads view. Ordered newest
+    first; active jobs (queued/downloading) naturally sort to the top since
+    they're the most recent. `active` is a convenience count for a tab badge."""
+    limit = min(limit, 300)
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            '''SELECT id, kind, artist, album, title, source, state, error, updated_at
+               FROM downloads ORDER BY id DESC LIMIT ?''',
+            (limit,)
+        )).fetchall()
+    items = [{
+        'id': r[0], 'kind': r[1], 'artist': r[2], 'album': r[3], 'title': r[4],
+        'source': r[5], 'state': r[6], 'error': r[7], 'at': r[8],
+    } for r in rows]
+    active = sum(1 for it in items if it['state'] in ('queued', 'downloading'))
+    return {'active': active, 'items': items}
+
+
 # ── Cycle control ─────────────────────────────────────────────────────────────
 
 @app.post('/api/scan-existing', status_code=200)
