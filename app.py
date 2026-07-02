@@ -484,7 +484,19 @@ async def set_monitored(artist_id: int, monitored: bool):
 @app.get('/api/albums')
 async def list_albums_by_status(status: str = ''):
     async with db.connect() as conn:
-        if status:
+        if status == 'pending':
+            # 'pending' is a pseudo-status: the actual download queue, matching
+            # the Pending stat count (missing + wanted + monitored). Filtering
+            # raw status='missing' would also surface unwanted/unmonitored
+            # albums the user will never fetch, so the count and list disagreed.
+            rows = await (await conn.execute(
+                '''SELECT al.id, al.title, al.year, al.cover_url, al.status, al.error,
+                          al.record_type, ar.id, ar.name, ar.image_url
+                   FROM albums al JOIN artists ar ON ar.id = al.artist_id
+                   WHERE al.status = 'missing' AND al.wanted = 1 AND ar.monitored = 1
+                   ORDER BY ar.name, al.year, al.title'''
+            )).fetchall()
+        elif status:
             rows = await (await conn.execute(
                 '''SELECT al.id, al.title, al.year, al.cover_url, al.status, al.error,
                           al.record_type, ar.id, ar.name, ar.image_url
