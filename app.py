@@ -430,7 +430,8 @@ async def list_artists():
              'album_total': r[7], 'album_done': r[8],
              'album_missing': r[9], 'album_error': r[10],
              'album_downloading': r[11], 'album_partial': r[12],
-             'n_albums': r[13], 'n_eps': r[14], 'n_singles': r[15]}
+             'n_albums': r[13], 'n_eps': r[14], 'n_singles': r[15],
+             'n_variants': r[16]}
             for r in rows]
 
 
