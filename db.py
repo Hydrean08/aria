@@ -94,6 +94,22 @@ async def _migrate(conn):
             created_at  TEXT    DEFAULT (datetime('now'))
         )''',
         'ALTER TABLE albums ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0',
+        # Per-item download activity feed. Powers the Downloads view in the
+        # Arion app so single-track "want" downloads (previously fire-and-forget
+        # with no visible state) can be tracked queued → downloading → done.
+        '''CREATE TABLE IF NOT EXISTS downloads (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind        TEXT NOT NULL DEFAULT 'track',
+            artist      TEXT,
+            album       TEXT,
+            title       TEXT,
+            source      TEXT,
+            state       TEXT NOT NULL DEFAULT 'queued',
+            error       TEXT,
+            created_at  TEXT DEFAULT (datetime('now')),
+            updated_at  TEXT DEFAULT (datetime('now'))
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads(created_at)',
     ]:
         try:
             await conn.execute(sql)
