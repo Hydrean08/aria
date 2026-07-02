@@ -209,6 +209,18 @@ async def get_top_tracks(deezer_artist_id: str, limit: int = 5) -> list[dict]:
         return []
 
 
+async def track_by_isrc(isrc: str) -> str | None:
+    """Resolve an ISRC to a Deezer track id via the exact /track/isrc: lookup.
+    Used to route Spotify-sourced downloads through the reliable Deezer path."""
+    try:
+        r = await _client().get(f'{DEEZER_API}/track/isrc:{isrc}')
+        data = r.json()
+        tid = data.get('id')
+        return str(tid) if tid else None
+    except Exception:
+        return None
+
+
 async def get_album_nb_tracks(deezer_album_id: str) -> int:
     """Track count for a single album. The /artist/{id}/albums listing omits
     nb_tracks, so Deezer-sourced albums need this to know their real size."""
