@@ -416,9 +416,10 @@ async def list_artists():
                    SUM(CASE WHEN al.status = 'error'       THEN 1 ELSE 0 END) AS album_error,
                    SUM(CASE WHEN al.status = 'downloading' THEN 1 ELSE 0 END) AS album_downloading,
                    SUM(CASE WHEN al.status = 'partial'     THEN 1 ELSE 0 END) AS album_partial,
-                   SUM(CASE WHEN al.record_type = 'album'  THEN 1 ELSE 0 END) AS n_albums,
-                   SUM(CASE WHEN al.record_type = 'ep'     THEN 1 ELSE 0 END) AS n_eps,
-                   SUM(CASE WHEN al.record_type = 'single' THEN 1 ELSE 0 END) AS n_singles
+                   SUM(CASE WHEN al.record_type = 'album'  AND al.is_variant = 0 THEN 1 ELSE 0 END) AS n_albums,
+                   SUM(CASE WHEN al.record_type = 'ep'     AND al.is_variant = 0 THEN 1 ELSE 0 END) AS n_eps,
+                   SUM(CASE WHEN al.record_type = 'single' AND al.is_variant = 0 THEN 1 ELSE 0 END) AS n_singles,
+                   SUM(CASE WHEN al.is_variant = 1 THEN 1 ELSE 0 END) AS n_variants
             FROM artists a
             LEFT JOIN albums al ON al.artist_id = a.id
             GROUP BY a.id
