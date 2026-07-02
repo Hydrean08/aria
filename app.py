@@ -596,11 +596,25 @@ async def set_album_wanted(album_id: int, wanted: bool):
 
 
 @app.patch('/api/artists/{artist_id}/albums/wanted')
-async def set_all_albums_wanted(artist_id: int, wanted: bool):
+async def set_all_albums_wanted(artist_id: int, wanted: bool, types: str = ''):
+    """Bulk set wanted for an artist. Optional `types` (comma-separated
+    record_types, e.g. 'album,ep,single') scopes it — used by the Download
+    Discography picker. Scoped selection targets primary releases only
+    (is_variant = 0), matching the per-type counts shown in the UI."""
+    requested = [t.strip() for t in types.split(',') if t.strip() in ('album', 'ep', 'single')]
     async with db.connect() as conn:
-        await conn.execute('UPDATE albums SET wanted = ? WHERE artist_id = ?', (int(wanted), artist_id))
+        if requested:
+            placeholders = ','.join('?' for _ in requested)
+            await conn.execute(
+                f'''UPDATE albums SET wanted = ?
+                    WHERE artist_id = ? AND is_variant = 0 AND record_type IN ({placeholders})''',
+                (int(wanted), artist_id, *requested)
+            )
+        else:
+            await conn.execute('UPDATE albums SET wanted = ? WHERE artist_id = ?', (int(wanted), artist_id))
+        affected = conn.total_changes
         await conn.commit()
-    return {'wanted': wanted}
+    return {'wanted': wanted, 'types': requested, 'updated': affected}
 
 
 @app.post('/api/albums/{album_id}/retry', status_code=202)
