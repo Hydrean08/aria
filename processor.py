@@ -379,6 +379,7 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
     if track_count == 0:
         updates['track_count'] = actual
     await _update_album(album_id, **updates)
+    await db.download_update(download_id, 'done', source=source)
     await db.log('info', f'Done: {artist_name} — {album_title} ({len(files)} tracks via {source})')
     asyncio.create_task(send_push('🎵 Downloaded', f'{artist_name} — {album_title}'))
     return True
