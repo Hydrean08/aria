@@ -86,6 +86,32 @@ async def _update_album(album_id: int, **kwargs):
         await conn.commit()
 
 
+_VARIANT_KEYWORDS = re.compile(
+    r'\b(alternates?|remix|rmx|instrumental|acoustic|live|sped\s*up|slowed|reverb'
+    r'|demo|reprise|a\s*cappella|acapella|karaoke|edit|extended|version|mix)\b',
+    re.IGNORECASE,
+)
+
+
+def _is_variant(title: str, artist_name: str) -> int:
+    """Flag secondary/duplicate releases so they don't inflate the primary
+    Albums/EPs/Singles counts:
+      • guest credits — the artist's OWN name inside a (feat./with …) tag,
+        meaning they're a guest, not the lead (e.g. 'her (feat. Forrest Frank)')
+      • alternate versions — a version keyword inside a (…)/[…] segment
+        (Alternates, remix, instrumental, live, Christmas Version, …)
+    Kept conservative: a base title that merely contains a keyword (e.g.
+    'Live Your Life') is NOT flagged because the keyword must be parenthesised."""
+    low = title.lower()
+    guest = re.search(r'[\(\[](?:feat\.?|ft\.?|with)\s+' + re.escape(artist_name.lower()) + r'\b', low)
+    if guest:
+        return 1
+    for segment in re.findall(r'[\(\[]([^)\]]*)[\)\]]', title):
+        if _VARIANT_KEYWORDS.search(segment):
+            return 1
+    return 0
+
+
 async def sync_artist(artist_name: str, deezer_id: str | None):
     await db.log('info', f'Syncing catalog for {artist_name}')
 
