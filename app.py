@@ -533,14 +533,15 @@ class AlbumIn(BaseModel):
 async def list_albums(artist_id: int):
     async with db.connect() as conn:
         rows = await (await conn.execute(
-            '''SELECT id, title, year, deezer_id, track_count, status, error, source, updated_at, cover_url, wanted, record_type
+            '''SELECT id, title, year, deezer_id, track_count, status, error, source, updated_at, cover_url, wanted, record_type, is_variant
                FROM albums WHERE artist_id = ? ORDER BY year, title''',
             (artist_id,)
         )).fetchall()
     return [{'id': r[0], 'title': r[1], 'year': r[2], 'deezer_id': r[3],
              'track_count': r[4], 'status': r[5], 'error': r[6],
              'source': r[7], 'updated_at': r[8], 'cover_url': r[9],
-             'wanted': bool(r[10]), 'record_type': r[11] or 'album'}
+             'wanted': bool(r[10]), 'record_type': r[11] or 'album',
+             'is_variant': bool(r[12])}
             for r in rows]
 
 
