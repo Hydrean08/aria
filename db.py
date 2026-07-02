@@ -139,3 +139,37 @@ async def log(level: str, message: str):
             'DELETE FROM logs WHERE id NOT IN (SELECT id FROM logs ORDER BY id DESC LIMIT 1000)'
         )
         await db.commit()
+
+
+async def download_create(kind: str, artist: str, album: str, title: str) -> int:
+    """Record a new download job in the activity feed and return its id.
+    Caller updates it with download_update as the job progresses."""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    async with connect() as db:
+        cur = await db.execute(
+            '''INSERT INTO downloads (kind, artist, album, title, state, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 'queued', ?, ?)''',
+            (kind, artist, album, title, now, now)
+        )
+        await db.execute(
+            'DELETE FROM downloads WHERE id NOT IN (SELECT id FROM downloads ORDER BY id DESC LIMIT 500)'
+        )
+        await db.commit()
+        return cur.lastrowid
+
+
+async def download_update(download_id: int, state: str,
+                          source: str | None = None, error: str | None = None):
+    """Advance a download job's state (queued → downloading → done/failed)."""
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    async with connect() as db:
+        await db.execute(
+            '''UPDATE downloads
+               SET state = ?,
+                   source = coalesce(?, source),
+                   error = ?,
+                   updated_at = ?
+               WHERE id = ?''',
+            (state, source, error, now, download_id)
+        )
+        await db.commit()
