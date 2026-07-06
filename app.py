@@ -31,7 +31,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import ai_suggest
 import db
 import processor
-from sources import deezer, spotiflac, spotify
+from sources import deezer, navidrome, spotiflac, spotify
 from tagger import safe_name as _safe_name
 
 _MUSIC_DIR = os.getenv('MUSIC_DIR', '/music')
@@ -269,7 +269,40 @@ async def _run_releases_watch():
         _releases_running = False
 
 
-async def _run_ai_tasks():
+async def _grounded_playlist(names: list[str], mood: str | None = None,
+                             discovery: bool = False) -> dict | None:
+    """Build a playlist from tracks the listener OWNS: the AI picks a theme + owned
+    artists, Navidrome supplies the real tracks, the AI curates the final order.
+    Every track carries its Navidrome id, so 'Add to Navidrome' is instant and
+    complete. Falls back to the discovery generator when discovery is requested,
+    Navidrome isn't configured, or the library can't fill the theme."""
+    async def _discovery():
+        return await (ai_suggest.build_mood_playlist(names, mood) if mood
+                      else ai_suggest.build_playlist(names))
+
+    if discovery or not navidrome.is_configured():
+        return await _discovery()
+    owned = await navidrome.library_artist_names()
+    universe = owned or names
+    if not universe:
+        return None
+    plan = await ai_suggest.plan_playlist(universe, mood)
+    if not plan:
+        return None
+    pool = await navidrome.library_tracks_for_artists(plan['artists'])
+    if not pool:
+        pool = await navidrome.library_tracks_for_artists(universe[:25])
+    if not pool:
+        return await _discovery()   # nothing owned to draw from — better a playlist than none
+    chosen = await ai_suggest.curate_from_pool(plan['name'], plan['description'], pool, 12)
+    if not chosen:
+        return None
+    tracks = [{'artist': t['artist'], 'title': t['title'], 'nav_id': t['id']} for t in chosen]
+    return {'name': plan['name'], 'description': plan['description'],
+            'track_list': json.dumps(tracks)}
+
+
+async def _run_ai_tasks(discovery: bool = False):
     global _ai_running
     if _ai_running:
         return
@@ -293,7 +326,7 @@ async def _run_ai_tasks():
                 await conn.commit()
             await db.log('info', f'AI suggested {len(suggestions)} artists')
 
-        playlist = await ai_suggest.build_playlist(names)
+        playlist = await _grounded_playlist(names, discovery=discovery)
         if playlist:
             async with db.connect() as conn:
                 await conn.execute(
@@ -963,9 +996,42 @@ async def list_ai_playlists():
 
 
 @app.post('/api/ai-playlists/generate', status_code=202)
-async def generate_ai_playlist():
-    asyncio.create_task(_task(_run_ai_tasks()))
+async def generate_ai_playlist(discovery: bool = False):
+    """Grounded by default (playlist built from tracks you own). Pass
+    ?discovery=true for the old suggest-anything behavior."""
+    asyncio.create_task(_task(_run_ai_tasks(discovery=discovery)))
     return {'queued': True}
+
+
+@app.get('/api/navidrome/status')
+async def navidrome_status():
+    """So the app can hide the export button when Navidrome isn't set up."""
+    return {'configured': navidrome.is_configured()}
+
+
+@app.post('/api/ai-playlists/{playlist_id}/export-navidrome')
+async def export_ai_playlist_to_navidrome(playlist_id: int):
+    """Match an AI playlist's tracks against the Navidrome library and create the
+    playlist there. Returns a match report (matched N of M + the misses)."""
+    if not navidrome.is_configured():
+        raise HTTPException(400, 'Navidrome is not configured on the server')
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            'SELECT name, track_list FROM playlists WHERE id = ?', (playlist_id,)
+        )).fetchone()
+    if not row:
+        raise HTTPException(404, 'playlist not found')
+    tracks = json.loads(row[1] or '[]')
+    if not tracks:
+        raise HTTPException(400, 'playlist has no tracks')
+    try:
+        result = await navidrome.export_tracks(row[0], tracks)
+    except Exception as e:
+        await db.log('warn', f'Navidrome export failed for playlist {playlist_id}: {e}')
+        raise HTTPException(502, f'Navidrome export failed: {e}')
+    await db.log('info', f"Navidrome: added {result['matched']}/{result['total']} "
+                         f"tracks to playlist {row[0]!r}")
+    return result
 
 
 @app.delete('/api/ai-playlists/{playlist_id}', status_code=204)
@@ -977,15 +1043,18 @@ async def delete_ai_playlist(playlist_id: int):
 
 class MoodIn(BaseModel):
     mood: str
+    discovery: bool = False
 
 
 @app.post('/api/ai-playlists/mood', status_code=202)
 async def generate_mood_playlist(body: MoodIn):
-    """Free-text mood/theme → custom playlist. Returns immediately; result
+    """Free-text mood/theme → custom playlist. Grounded in your library by default
+    (set discovery=true to let it suggest anything). Returns immediately; result
     lands in the playlists table once GLM-4 responds (~5-30s)."""
     mood = (body.mood or '').strip()
     if not mood:
         raise HTTPException(400, 'mood is required')
+    discovery = bool(body.discovery)
 
     async def _run_mood():
         async with db.connect() as conn:
@@ -993,7 +1062,7 @@ async def generate_mood_playlist(body: MoodIn):
                 'SELECT name FROM artists WHERE monitored = 1'
             )).fetchall()
         names = [r[0] for r in rows]
-        playlist = await ai_suggest.build_mood_playlist(names, mood)
+        playlist = await _grounded_playlist(names, mood, discovery=discovery)
         if not playlist:
             await db.log('warn', f'AI mood playlist failed: {mood!r}')
             return

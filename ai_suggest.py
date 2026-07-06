@@ -43,6 +43,23 @@ Format: {{"name": "Playlist Name", "description": "One sentence about why these 
 Library artists (for taste reference):
 {artists}"""
 
+_PLAN_PLAYLIST_PROMPT = """\
+You are a music curator building a playlist from the listener's OWN library.
+{mood_line}Given these artists they own, choose a cohesive theme and pick 6-14 of THESE artists that fit it. Use ONLY names from the list — do not invent artists.
+Respond with ONLY a JSON object, no other text.
+Format: {{"name": "Playlist Name", "description": "One sentence vibe", "artists": ["Exact Name From List", "..."]}}
+
+Owned artists:
+{artists}"""
+
+_CURATE_PROMPT = """\
+You are a music curator assembling the playlist "{name}" ({description}).
+Choose the {target} tracks that best fit the theme and flow well together, picking ONLY from this numbered list of the listener's OWNED tracks. Do not invent tracks.
+Respond with ONLY a JSON array of the chosen numbers in play order, e.g. [3, 7, 1, 12].
+
+Owned tracks:
+{tracks}"""
+
 _DIGEST_PROMPT = """\
 You are a music critic writing a personal note to the listener about their library. In 3-5 sentences:
 - Identify the dominant style/genre/era of the collection
@@ -234,6 +251,70 @@ async def build_mood_playlist(library_artists: list[str], mood: str) -> dict | N
         }
     except Exception:
         return None
+
+
+async def plan_playlist(owned_artists: list[str], mood: str | None = None) -> dict | None:
+    """Step 1 of grounded generation: pick a theme + which of the OWNED artists fit
+    it. Returns {name, description, artists:[...]} with artists validated to the
+    owned list (the model can't smuggle in artists the listener doesn't have)."""
+    if not owned_artists:
+        return None
+    mood_line = (f'The listener wants a playlist for this mood/theme: "{mood.strip()[:200]}".\n'
+                 if mood and mood.strip() else "")
+    content = await _call_ollama(_PLAN_PLAYLIST_PROMPT.format(
+        mood_line=mood_line, artists=", ".join(owned_artists[:120])))
+    if not content:
+        return None
+    raw = _extract_json(content, "{")
+    if not raw:
+        return None
+    try:
+        r = json.loads(raw)
+    except Exception:
+        return None
+    owned_map = {a.lower(): a for a in owned_artists}
+    picked = [owned_map[a.lower()] for a in (r.get("artists") or [])
+              if isinstance(a, str) and a.lower() in owned_map]
+    return {
+        "name": str(r.get("name", "Library Mix")),
+        "description": str(r.get("description", "")),
+        "artists": picked or owned_artists[:14],  # fall back to a slice of the library
+    }
+
+
+async def curate_from_pool(name: str, description: str, pool: list[dict],
+                           target: int = 12) -> list[dict]:
+    """Step 2 of grounded generation: pick the best `target` tracks from the pool of
+    the listener's OWNED tracks. Every returned track is real. Falls back to the
+    first N owned tracks if the model output is unusable — never invents anything."""
+    if not pool:
+        return []
+    listed = "\n".join(f"{i}. {t.get('artist', '?')} — {t.get('title', '?')}"
+                       for i, t in enumerate(pool[:80]))
+    content = await _call_ollama(_CURATE_PROMPT.format(
+        name=name, description=description or "", target=target, tracks=listed))
+    if not content:
+        return pool[:target]
+    raw = _extract_json(content, "[")
+    if not raw:
+        return pool[:target]
+    try:
+        idxs = json.loads(raw)
+    except Exception:
+        return pool[:target]
+    chosen: list[dict] = []
+    seen: set[int] = set()
+    for i in idxs:
+        try:
+            i = int(i)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= i < len(pool) and i not in seen:
+            seen.add(i)
+            chosen.append(pool[i])
+        if len(chosen) >= target:
+            break
+    return chosen or pool[:target]
 
 
 async def library_digest(library_artists: list[str]) -> str | None:
