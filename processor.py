@@ -379,6 +379,18 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
                 await _cleanup_files(files)
                 files = []
 
+    # 4b. YouTube Music single — singles/AI releases often aren't published as an
+    #     album entity, so album search misses them; fall back to a song/video match.
+    if not files:
+        video_id = await ytmusic.search_song(artist_name, album_title)
+        if video_id:
+            files = await ytmusic.download_song(video_id, dest, artist_name, album_title)
+            if files and await _validate_files(files):
+                source = 'ytmusic'
+            else:
+                await _cleanup_files(files)
+                files = []
+
     if not files:
         async with db.connect() as conn:
             row = await (await conn.execute(
