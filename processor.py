@@ -946,6 +946,22 @@ async def run_cycle():
     await db.log('info', 'Cycle started')
 
     async with db.connect() as conn:
+        # Never let a request fail forever. Hitting MAX_ALBUM_RETRIES ('error')
+        # is often caused by a transient outage (a provider down, a resolver
+        # rate-limited) rather than the album being genuinely unavailable — and
+        # YouTube Music's near-universal catalog means almost everything is
+        # obtainable eventually. So a give-up is a *slow re-check*, never a
+        # permanent dead end: revive given-up albums for a fresh full-runway
+        # attempt on a weekly cadence. Same connection + commit means the
+        # revived rows are included in this cycle's SELECT below.
+        revived = await conn.execute(
+            "UPDATE albums SET status='missing', retry_count=0, updated_at=datetime('now') "
+            "WHERE status='error' AND updated_at < datetime('now','-7 days')"
+        )
+        await conn.commit()
+        if revived.rowcount:
+            await db.log('info', f'Revived {revived.rowcount} given-up album(s) for re-check')
+
         rows = await (await conn.execute('''
             SELECT al.id, ar.name, al.title, al.deezer_id, al.spotify_id, al.track_count, al.year
             FROM albums al
