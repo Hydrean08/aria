@@ -399,10 +399,11 @@ async def _process_album(album_id: int, artist_name: str, album_title: str,
         new_count = (row[0] if row else 0) + 1
         if new_count >= MAX_ALBUM_RETRIES:
             await _update_album(album_id, status='error', retry_count=new_count,
-                                error=f'Not found after {new_count} attempts')
-            await db.download_update(download_id, 'failed', error=f'Not found after {new_count} attempts')
-            await db.log('warn', f'Giving up after {new_count} attempts: {artist_name} — {album_title}')
-            asyncio.create_task(send_push('❌ Download failed', f'{artist_name} — {album_title} (gave up after {new_count} tries)'))
+                                error=f'Not found after {new_count} attempts — will auto re-check weekly')
+            await db.download_update(download_id, 'failed',
+                                     error=f'Not found after {new_count} attempts — will auto re-check weekly')
+            await db.log('warn', f'Paused after {new_count} attempts (auto re-check in 7d): {artist_name} — {album_title}')
+            asyncio.create_task(send_push('⏸️ Download paused', f'{artist_name} — {album_title} (not found after {new_count} tries; will retry automatically)'))
         else:
             await _update_album(album_id, status='missing', retry_count=new_count,
                                 error='Not found on SpotiFLAC, Soulseek, or YouTube Music')
