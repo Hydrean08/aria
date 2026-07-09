@@ -951,13 +951,15 @@ async def run_cycle():
         # is often caused by a transient outage (a provider down, a resolver
         # rate-limited) rather than the album being genuinely unavailable — and
         # YouTube Music's near-universal catalog means almost everything is
-        # obtainable eventually. So a give-up is a *slow re-check*, never a
+        # obtainable eventually. So a give-up is a *daily re-check*, never a
         # permanent dead end: revive given-up albums for a fresh full-runway
-        # attempt on a weekly cadence. Same connection + commit means the
-        # revived rows are included in this cycle's SELECT below.
+        # attempt. Retries are free (self-hosted), so the only throttle here is
+        # a 1-day floor to keep a genuinely-dead album from re-notifying every
+        # cycle. Same connection + commit means the revived rows are included in
+        # this cycle's SELECT below.
         revived = await conn.execute(
             "UPDATE albums SET status='missing', retry_count=0, updated_at=datetime('now') "
-            "WHERE status='error' AND updated_at < datetime('now','-7 days')"
+            "WHERE status='error' AND updated_at < datetime('now','-1 day')"
         )
         await conn.commit()
         if revived.rowcount:
