@@ -37,6 +37,41 @@ async def search_album(artist: str, album: str) -> str | None:
         return None
 
 
+def _search_song_video_id(artist: str, title: str) -> str | None:
+    """Find a single track on YouTube Music as a song, then a video.
+
+    Singles (e.g. AI-music releases) are often published only as a song/video and
+    never surface under an 'albums' search, so album-only lookup misses them even
+    though a human finds them instantly. Returns a videoId, or None.
+    """
+    artist_l = artist.lower()
+    title_l  = title.lower()
+    for filt in ('songs', 'videos'):
+        results = _ytm.search(f'{artist} {title}', filter=filt, limit=8)
+        if not results:
+            continue
+        # Strict: title matches and the artist appears in the artist list or title.
+        for r in results:
+            r_title  = r.get('title', '').lower()
+            r_artist = ' '.join(a.get('name', '') for a in r.get('artists', [])).lower()
+            if title_l in r_title and (artist_l in r_artist or artist_l in r_title) and r.get('videoId'):
+                return r['videoId']
+        # Looser: title substring only (top result wins).
+        for r in results:
+            if title_l in r.get('title', '').lower() and r.get('videoId'):
+                return r['videoId']
+    return None
+
+
+async def search_song(artist: str, title: str) -> str | None:
+    """Return a YouTube Music videoId for a single track, or None if not found."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _search_song_video_id, artist, title)
+    except Exception:
+        return None
+
+
 def _fix_tags(files: list[str], artist: str, album: str) -> None:
     """Override album/artist tags — YouTube Music often sets 'Various Artists' on compilations."""
     for path in files:
