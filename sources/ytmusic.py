@@ -130,3 +130,45 @@ async def download_album(browse_id: str, dest: str, artist: str, album: str) -> 
         return await loop.run_in_executor(None, _download_browse_id, browse_id, dest, artist, album)
     except Exception:
         return []
+
+
+def _download_video_id(video_id: str, dest: str, artist: str, album: str) -> list[str]:
+    audio_exts = {'.m4a', '.mp3', '.opus', '.ogg', '.webm'}
+    os.makedirs(dest, exist_ok=True)
+    for f in os.listdir(dest):
+        if os.path.splitext(f)[1].lower() in audio_exts:
+            try:
+                os.unlink(os.path.join(dest, f))
+            except OSError:
+                pass
+    url = f'https://music.youtube.com/watch?v={video_id}'
+    ydl_opts = {
+        'format':       'bestaudio[ext=m4a][abr>200]/bestaudio[ext=m4a]/bestaudio/best',
+        'outtmpl':      os.path.join(dest, '%(title)s.%(ext)s'),
+        'quiet':        True,
+        'no_warnings':  True,
+        'ignoreerrors': True,
+        'postprocessors': [{
+            'key':            'FFmpegExtractAudio',
+            'preferredcodec': 'm4a',
+        }],
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([url])
+
+    files = sorted(
+        os.path.join(dest, f)
+        for f in os.listdir(dest)
+        if os.path.splitext(f)[1].lower() in audio_exts
+    )
+    _fix_tags(files, artist, album)
+    return files
+
+
+async def download_song(video_id: str, dest: str, artist: str, album: str) -> list[str]:
+    """Download a single track by videoId into dest. Returns list of file paths."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _download_video_id, video_id, dest, artist, album)
+    except Exception:
+        return []
