@@ -1,5 +1,6 @@
 import asyncio
 import os
+import time
 
 import yt_dlp
 from mutagen.mp4 import MP4
@@ -8,6 +9,55 @@ from ytmusicapi import YTMusic
 DOWNLOADS_DIR = os.getenv('DOWNLOADS_DIR', '/downloads')
 
 _ytm = YTMusic()  # no auth — public search only
+
+# A dead-but-open YouTube stream can trickle a byte or two per second forever;
+# `socket_timeout` only fires when NO data arrives, so that slow-loris case slips
+# past it and pins a CPU core indefinitely (the 2026-07 'Habibi Stark' download
+# ran 46h at 1.58 B/s). These bound how long a stalled download is tolerated.
+STALL_TIMEOUT_S = 45          # abort if < STALL_MIN_PROGRESS_B for this long
+STALL_MIN_PROGRESS_B = 4096   # bytes of real progress that "un-stalls" the window
+
+
+def _stall_guard_hook():
+    """yt-dlp progress hook that aborts a download making no meaningful progress.
+    Fresh per download so each gets its own timer."""
+    state = {'ts': time.monotonic(), 'bytes': 0}
+
+    def hook(d):
+        status = d.get('status')
+        if status == 'finished':
+            state['ts'] = time.monotonic()
+            state['bytes'] = 0
+            return
+        if status != 'downloading':
+            return
+        got = d.get('downloaded_bytes') or 0
+        now = time.monotonic()
+        if got - state['bytes'] >= STALL_MIN_PROGRESS_B:
+            state['bytes'] = got
+            state['ts'] = now
+        elif now - state['ts'] > STALL_TIMEOUT_S:
+            raise yt_dlp.utils.DownloadError(
+                f'stalled: <{STALL_MIN_PROGRESS_B}B in {STALL_TIMEOUT_S}s')
+
+    return hook
+
+
+def _ydl_opts(outtmpl: str) -> dict:
+    """Shared yt-dlp options with bounded timeouts + a stall guard so a dead
+    source can't hang the download chain forever."""
+    return {
+        'format':           'bestaudio[ext=m4a][abr>200]/bestaudio[ext=m4a]/bestaudio/best',
+        'outtmpl':          outtmpl,
+        'quiet':            True,
+        'no_warnings':      True,
+        'ignoreerrors':     True,
+        'socket_timeout':   30,   # abort a read that receives NO data for 30s
+        'retries':          3,
+        'fragment_retries': 3,
+        'progress_hooks':   [_stall_guard_hook()],
+        'postprocessors':   [{'key': 'FFmpegExtractAudio', 'preferredcodec': 'm4a'}],
+    }
 
 
 def _search_browse_id(artist: str, album: str) -> str | None:
