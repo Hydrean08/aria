@@ -150,17 +150,7 @@ def _download_browse_id(browse_id: str, dest: str, artist: str, album: str) -> l
             except OSError:
                 pass
     url = f'https://music.youtube.com/browse/{browse_id}'
-    ydl_opts = {
-        'format':       'bestaudio[ext=m4a][abr>200]/bestaudio[ext=m4a]/bestaudio/best',
-        'outtmpl':      os.path.join(dest, '%(playlist_index)02d - %(title)s.%(ext)s'),
-        'quiet':        True,
-        'no_warnings':  True,
-        'ignoreerrors': True,
-        'postprocessors': [{
-            'key':            'FFmpegExtractAudio',
-            'preferredcodec': 'm4a',
-        }],
-    }
+    ydl_opts = _ydl_opts(os.path.join(dest, '%(playlist_index)02d - %(title)s.%(ext)s'))
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
