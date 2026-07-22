@@ -996,3 +996,177 @@ async def run_cycle():
     if any(succeeded):
         await plex.scan_music_library()
     await db.log('info', 'Cycle complete')
+
+
+# ── On-disk library management (Phase 1) ──────────────────────────────────────
+# Every operation here derives its filesystem path SERVER-SIDE from the DB
+# artist/album names (via safe_name) — the client never supplies a path. As
+# defence in depth we realpath-confine every resolved path under MUSIC_DIR, so
+# a crafted name (embedded '..', symlink, etc.) can never escape the music root.
+
+_LIB_AUDIO_EXTS = ('.mp3', '.flac', '.m4a', '.aac', '.ogg', '.opus')
+
+
+def _safe_album_dir(artist: str, album: str) -> str | None:
+    """Resolve an album's folder, hard-confined to MUSIC_DIR. Returns None if the
+    path would escape the root OR resolve to anything but a genuine artist/album
+    leaf.
+
+    Critically: safe_name() (tagger) does NOT reject empty/'.'/'..' names — it
+    only substitutes <>:"/\\|?* and strips whitespace. So a DB title of '', '.',
+    or whitespace-only collapses the album component and _dest_dir resolves to
+    the ARTIST directory itself, which passes a bare startswith() guard — and a
+    single-album delete would then rmtree every album the artist owns. Guard by
+    (1) rejecting empty/dot safe_name components and (2) requiring the resolved
+    path to sit exactly one level below the artist directory."""
+    a, b = safe_name(artist), safe_name(album)
+    if a in ('', '.', '..') or b in ('', '.', '..'):
+        return None
+    root = os.path.realpath(MUSIC_DIR)
+    artist_dir = os.path.join(root, a)  # root is realpath'd; a has no separators
+    path = os.path.realpath(_dest_dir(artist, album))
+    if os.path.dirname(path) != artist_dir or not path.startswith(root + os.sep):
+        return None
+    return path
+
+
+def _confined_leaf(path: str) -> str | None:
+    """Validate a STORED folder path: it must be a real location exactly one
+    level below an artist directory (MUSIC_DIR/<artist>/<album>), confined to
+    MUSIC_DIR. Rejects the artist root itself and anything shallower/deeper or
+    outside — so a messy imported folder (loose files directly under the artist
+    dir, a discography-dump folder) can never become a whole-folder delete
+    target that would wipe siblings."""
+    root = os.path.realpath(MUSIC_DIR)
+    p = os.path.realpath(path)
+    if not p.startswith(root + os.sep):
+        return None
+    if os.path.relpath(p, root).count(os.sep) != 1:  # exactly <artist>/<album>
+        return None
+    return p
+
+
+def _resolve_album_dir(artist: str, album: str, folder: str | None = None) -> str | None:
+    """Prefer the album's stored on-disk folder (imported/pre-existing albums
+    have non-canonical names), falling back to the derived canonical path."""
+    if folder:
+        leaf = _confined_leaf(folder)
+        if leaf is not None:
+            return leaf
+    return _safe_album_dir(artist, album)
+
+
+def _file_info_sync(full: str) -> dict:
+    name = os.path.basename(full)
+    ext = os.path.splitext(name)[1].lower().lstrip('.')
+    info = {'name': name, 'ext': ext, 'bitrate': None, 'duration': None,
+            'lossless': ext == 'flac', 'size': 0}
+    try:
+        info['size'] = os.path.getsize(full)
+    except OSError:
+        pass
+    try:
+        meta = mutagen.File(full)
+        inf = getattr(meta, 'info', None) if meta is not None else None
+        if inf is not None:
+            br = getattr(inf, 'bitrate', None)
+            if br:
+                info['bitrate'] = round(br / 1000)  # kbps
+            length = getattr(inf, 'length', None)
+            if length:
+                info['duration'] = round(length)
+    except Exception:
+        pass
+    return info
+
+
+def _list_album_files_sync(path: str) -> list[dict]:
+    try:
+        names = sorted(os.listdir(path))
+    except OSError:
+        return []
+    return [_file_info_sync(os.path.join(path, n)) for n in names
+            if os.path.isfile(os.path.join(path, n))
+            and n.lower().endswith(_LIB_AUDIO_EXTS)]
+
+
+async def list_album_files(artist: str, album: str, folder: str | None = None) -> dict:
+    """Ground truth: what is ACTUALLY on disk for this album, with per-file
+    format / bitrate / size — independent of the album's DB status."""
+    path = _resolve_album_dir(artist, album, folder)
+    if path is None:
+        return {'exists': False, 'folder': None, 'files': [], 'total_bytes': 0}
+    exists = os.path.isdir(path)
+    files = await asyncio.to_thread(_list_album_files_sync, path) if exists else []
+    return {'exists': exists, 'folder': path, 'files': files,
+            'total_bytes': sum(f['size'] for f in files)}
+
+
+def _delete_dir_sync(path: str) -> dict:
+    deleted = freed = 0
+    for root, _dirs, filenames in os.walk(path):
+        for fn in filenames:
+            try:
+                freed += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                pass
+            deleted += 1
+    shutil.rmtree(path, ignore_errors=True)
+    return {'deleted_files': deleted, 'freed_bytes': freed}
+
+
+async def delete_album_files(artist: str, album: str, folder: str | None = None) -> dict:
+    """Delete an album's on-disk folder (stored path if valid, else derived —
+    both confined to MUSIC_DIR). Prunes the artist directory if left empty.
+    No-op if the folder is absent."""
+    path = _resolve_album_dir(artist, album, folder)
+    if path is None or not os.path.isdir(path):
+        return {'deleted_files': 0, 'freed_bytes': 0, 'existed': False}
+    result = await asyncio.to_thread(_delete_dir_sync, path)
+    parent = os.path.dirname(path)
+    try:
+        root = os.path.realpath(MUSIC_DIR)
+        if os.path.realpath(parent).startswith(root + os.sep) and not os.listdir(parent):
+            os.rmdir(parent)
+    except OSError:
+        pass
+    result['existed'] = True
+    return result
+
+
+def _delete_one_file_sync(path: str, filename: str) -> bool:
+    # basename-only: reject any path separators / traversal in the name.
+    if filename != os.path.basename(filename) or filename in ('', '.', '..'):
+        return False
+    full = os.path.realpath(os.path.join(path, filename))
+    if not full.startswith(os.path.realpath(path) + os.sep):
+        return False
+    try:
+        os.unlink(full)
+        return True
+    except OSError:
+        return False
+
+
+async def delete_track_file(artist: str, album: str, filename: str, folder: str | None = None) -> bool:
+    path = _resolve_album_dir(artist, album, folder)
+    if path is None or not os.path.isdir(path):
+        return False
+    return await asyncio.to_thread(_delete_one_file_sync, path, filename)
+
+
+async def purge_artist_files(artist: str, album_titles: list[str]) -> dict:
+    """Delete every known album folder for an artist, then the artist folder
+    itself (catching any stray/untracked sub-folders). Confined to MUSIC_DIR."""
+    total = {'deleted_files': 0, 'freed_bytes': 0, 'albums_removed': 0}
+    for title in album_titles:
+        r = await delete_album_files(artist, title)
+        if r.get('existed'):
+            total['albums_removed'] += 1
+            total['deleted_files'] += r['deleted_files']
+            total['freed_bytes'] += r['freed_bytes']
+    root = os.path.realpath(MUSIC_DIR)
+    apath = os.path.realpath(os.path.join(MUSIC_DIR, safe_name(artist)))
+    if apath.startswith(root + os.sep) and os.path.isdir(apath):
+        await asyncio.to_thread(shutil.rmtree, apath, True)
+    return total

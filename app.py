@@ -503,11 +503,31 @@ async def sync_artist(artist_id: int):
     return {'queued': True}
 
 
-@app.delete('/api/artists/{artist_id}', status_code=204)
-async def remove_artist(artist_id: int):
+@app.delete('/api/artists/{artist_id}', status_code=200)
+async def remove_artist(artist_id: int, purge: bool = False):
+    """Remove an artist from the library. With ?purge=true, ALSO delete their
+    downloaded files from disk (otherwise the DB rows go but the audio is left
+    orphaned on disk). Album titles are read before the cascade delete so the
+    purge knows which folders to remove."""
     async with db.connect() as conn:
+        row = await (await conn.execute(
+            'SELECT name FROM artists WHERE id = ?', (artist_id,)
+        )).fetchone()
+        titles = []
+        if purge and row:
+            trows = await (await conn.execute(
+                'SELECT title FROM albums WHERE artist_id = ?', (artist_id,)
+            )).fetchall()
+            titles = [t[0] for t in trows]
         await conn.execute('DELETE FROM artists WHERE id = ?', (artist_id,))
         await conn.commit()
+    purged = None
+    if purge and row:
+        purged = await processor.purge_artist_files(row[0], titles)
+        await db.log('info', f'Removed artist + purged disk: {row[0]} '
+                             f'({purged["deleted_files"]} files, '
+                             f'{purged["albums_removed"]} albums)')
+    return {'removed': True, 'purged': purged}
 
 
 @app.patch('/api/artists/{artist_id}/monitor')
@@ -580,6 +600,11 @@ async def list_albums(artist_id: int):
 
 @app.post('/api/artists/{artist_id}/albums', status_code=201)
 async def add_album(artist_id: int, body: AlbumIn):
+    # Reject empty / whitespace-only titles at the boundary. Besides being
+    # meaningless, such a title collapses to an empty on-disk folder name, which
+    # the file-management guards must never let resolve to the artist root.
+    if not body.title.strip():
+        raise HTTPException(400, 'Album title is required')
     async with db.connect() as conn:
         row = await (await conn.execute(
             'SELECT name FROM artists WHERE id = ?', (artist_id,)
@@ -626,6 +651,188 @@ async def set_album_wanted(album_id: int, wanted: bool):
         await conn.execute('UPDATE albums SET wanted = ? WHERE id = ?', (int(wanted), album_id))
         await conn.commit()
     return {'wanted': wanted}
+
+
+# ── On-disk library management (Phase 1) ──────────────────────────────────────
+# Paths are always derived server-side from the album's DB artist/album via
+# processor's MUSIC_DIR-confined helpers — the client only ever sends an
+# album_id (and, for single-file delete, a bare filename validated server-side).
+
+async def _album_disk_ref(album_id: int):
+    """(artist_name, album_title, folder) for an album id, or None.
+
+    `folder` is the stored on-disk path, or None when the derived canonical path
+    should be used. Critically, a folder SHARED by more than one album row (e.g.
+    a "Discography (5 Releases)" dump directory that holds several albums' tracks
+    in one dir) is deliberately nulled out here: it must never become a
+    whole-folder delete/list target, because rmtree-ing it — or listing/deleting
+    a bare filename in it — would hit sibling albums' audio. Such albums fall
+    back to the derived per-album path (absent for dumps, so they simply show as
+    not-on-disk) until the library is organized into clean per-album folders."""
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            '''SELECT ar.name, al.title, al.folder FROM albums al
+               JOIN artists ar ON ar.id = al.artist_id WHERE al.id = ?''',
+            (album_id,)
+        )).fetchone()
+        if not row:
+            return None
+        folder = row[2]
+        if folder:
+            shared = await (await conn.execute(
+                'SELECT count(*) FROM albums WHERE folder = ?', (folder,)
+            )).fetchone()
+            if shared[0] > 1:
+                folder = None
+    return (row[0], row[1], folder)
+
+
+@app.get('/api/albums/{album_id}/files')
+async def album_files(album_id: int):
+    """What is actually on disk for this album — files, format, bitrate, size."""
+    ref = await _album_disk_ref(album_id)
+    if not ref:
+        raise HTTPException(404, 'Album not found')
+    return await processor.list_album_files(*ref)
+
+
+@app.delete('/api/albums/{album_id}/files', status_code=200)
+async def delete_album_files_endpoint(album_id: int):
+    """Delete an album's downloaded files from disk. The DB row stays as
+    'missing' so it can be re-downloaded."""
+    ref = await _album_disk_ref(album_id)
+    if not ref:
+        raise HTTPException(404, 'Album not found')
+    result = await processor.delete_album_files(*ref)
+    async with db.connect() as conn:
+        await conn.execute("UPDATE albums SET status = 'missing' WHERE id = ?", (album_id,))
+        await conn.commit()
+    if result.get('existed'):
+        await db.log('info', f'Deleted from disk: {ref[0]} — {ref[1]} '
+                             f'({result["deleted_files"]} files)')
+    return result
+
+
+class DeleteFileIn(BaseModel):
+    filename: str
+
+
+@app.post('/api/albums/{album_id}/files/delete', status_code=200)
+async def delete_album_track_file(album_id: int, body: DeleteFileIn):
+    """Delete a single audio file from an album's folder. `filename` is a bare
+    name (no path) validated server-side against traversal."""
+    ref = await _album_disk_ref(album_id)
+    if not ref:
+        raise HTTPException(404, 'Album not found')
+    ok = await processor.delete_track_file(ref[0], ref[1], body.filename, ref[2])
+    if not ok:
+        raise HTTPException(400, 'File not found or invalid filename')
+    await db.log('info', f'Deleted file: {ref[0]} — {ref[1]} / {body.filename}')
+    return {'deleted': body.filename}
+
+
+# ── Library ingestion (make Aria's DB reflect what's on disk) ──────────────────
+
+@app.get('/api/library/ingest/preview')
+async def library_ingest_preview():
+    """Dry run: what a full import WOULD add/reconcile. No DB writes."""
+    import ingest
+    r = await asyncio.to_thread(ingest.analyze)
+    if 'error' in r:
+        raise HTTPException(500, r['error'])
+    return {
+        'total_files': r['total_files'],
+        'tagged_files': r['tagged_files'],
+        'unclassified': len(r['unclassified']),
+        'albums_on_disk': r['group_count'],
+        'artists_on_disk': r['disk_artist_count'],
+        'db_artists': r['db_artist_count'],
+        'new_artists': len(r['new_artist_names']),
+        'new_artist_albums': len(r['new_artist_albums']),
+        'new_albums_for_known_artists': len(r['known_artist_new_album']),
+        'already_known': len(r['already_known']),
+    }
+
+
+@app.post('/api/library/ingest')
+async def library_ingest():
+    """Import the on-disk library: add artist/album rows for everything found,
+    mark owned albums complete. ADDS rows only — never moves or deletes audio.
+    Reversible via /api/library/ingest/undo."""
+    import ingest
+    result = await asyncio.to_thread(ingest.commit)
+    if 'error' in result:
+        raise HTTPException(500, result['error'])
+    await db.log('info',
+                 f'Library import: +{result["artists_created"]} artists, '
+                 f'+{result["albums_created"]} albums, '
+                 f'{result["albums_reconciled"]} reconciled')
+    return result
+
+
+@app.post('/api/library/ingest/undo')
+async def library_ingest_undo():
+    """Undo a disk import: delete imported albums + prune the artists the import
+    created. Never touches audio or artists you added yourself."""
+    import ingest
+    result = await asyncio.to_thread(ingest.undo)
+    await db.log('info',
+                 f'Library import undone: -{result["albums_deleted"]} albums, '
+                 f'-{result["artists_pruned"]} artists')
+    return result
+
+
+# ── Auto-tagger (fingerprint-based, preview-first, reversible) ─────────────────
+
+async def _album_dir_ctx(album_id: int):
+    """Resolved single-album on-disk dir + names, or None. Inherits the
+    shared-folder safety from _album_disk_ref (a dump folder resolves to the
+    derived, absent path so the auto-tagger can't retag a sibling album)."""
+    ref = await _album_disk_ref(album_id)
+    if not ref:
+        return None
+    return {'artist': ref[0], 'album': ref[1],
+            'dir': processor._resolve_album_dir(ref[0], ref[1], ref[2])}
+
+
+@app.get('/api/albums/{album_id}/tagfix/preview')
+async def tagfix_preview(album_id: int):
+    """READ ONLY: fingerprint each track and propose corrected artist/title."""
+    ctx = await _album_dir_ctx(album_id)
+    if not ctx:
+        raise HTTPException(404, 'Album not found')
+    import tagfix
+    return await tagfix.preview(ctx['dir'], ctx['artist'], ctx['album'])
+
+
+class TagFixIn(BaseModel):
+    items: list
+
+
+@app.post('/api/albums/{album_id}/tagfix/apply')
+async def tagfix_apply(album_id: int, body: TagFixIn):
+    """Apply the approved corrections. Backs up original tags first (reversible)."""
+    ctx = await _album_dir_ctx(album_id)
+    if not ctx:
+        raise HTTPException(404, 'Album not found')
+    import tagfix
+    result = await tagfix.apply(ctx['dir'], body.items, ctx['artist'], ctx['album'])
+    await db.log('info', f'Tag fix applied: {ctx["artist"]} — {ctx["album"]} '
+                         f'({result.get("applied", 0)} files)')
+    return result
+
+
+@app.post('/api/albums/{album_id}/tagfix/undo')
+async def tagfix_undo(album_id: int):
+    """Restore original tags for this album from the pre-fix backups."""
+    ctx = await _album_dir_ctx(album_id)
+    if not ctx:
+        raise HTTPException(404, 'Album not found')
+    import tagfix
+    result = await tagfix.undo(ctx['dir'])
+    await db.log('info', f'Tag fix undone: {ctx["artist"]} — {ctx["album"]} '
+                         f'({result.get("restored", 0)} files)')
+    return result
 
 
 @app.patch('/api/artists/{artist_id}/albums/wanted')
@@ -1158,11 +1365,9 @@ _LOGIN_HTML = """<!doctype html><html><head><meta charset="utf-8">
 form{background:#17171b;padding:32px;border-radius:14px;box-shadow:0 10px 40px rgba(0,0,0,.5);width:300px}
 h1{font-size:18px;margin:0 0 16px}input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #333;background:#0d0d0f;color:#eee;margin-bottom:12px}
 button{width:100%;padding:10px;border:0;border-radius:8px;background:#1db954;color:#fff;font-weight:600;cursor:pointer}.err{color:#f55;font-size:13px;min-height:18px}</style></head>
-<body><form onsubmit="go(event)"><h1>Aria</h1><input id="k" type="password" placeholder="API key" autofocus>
+<body><form id="login-form"><h1>Aria</h1><input id="k" type="password" placeholder="API key" autofocus>
 <div class="err" id="e"></div><button>Sign in</button></form>
-<script>async function go(ev){ev.preventDefault();const k=document.getElementById('k').value;
-const r=await fetch('/api/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k})});
-if(r.ok){location.reload()}else{document.getElementById('e').textContent=r.status===429?'Too many attempts':'Invalid key'}}</script>
+<script src="/static/login.js"></script>
 </body></html>"""
 
 

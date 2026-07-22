@@ -114,6 +114,24 @@ async def _migrate(conn):
             updated_at  TEXT DEFAULT (datetime('now'))
         )''',
         'CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads(created_at)',
+        # On-disk library management: the album's real folder path. Aria
+        # downloads store the derived path; ingested/pre-existing albums store
+        # their actual (often non-canonical) folder so the file manager can find
+        # them. NULL = derive from artist/title.
+        'ALTER TABLE albums ADD COLUMN folder TEXT',
+        # Marks artists created by the disk-import pass, so an import can be
+        # cleanly undone (delete imported albums + prune the artists they created)
+        # without touching artists you added yourself.
+        'ALTER TABLE artists ADD COLUMN imported INTEGER NOT NULL DEFAULT 0',
+        # Original tag values snapshotted before the auto-tagger overwrites a
+        # file, so a tag-fix is always reversible on irreplaceable audio.
+        '''CREATE TABLE IF NOT EXISTS tag_backups (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            path        TEXT NOT NULL,
+            original    TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )''',
+        'CREATE INDEX IF NOT EXISTS idx_tag_backups_path ON tag_backups(path)',
     ]:
         try:
             await conn.execute(sql)
