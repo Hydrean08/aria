@@ -33,6 +33,15 @@ FIELDS = ('title', 'artist', 'albumartist', 'album', 'date', 'tracknumber')
 HIGH_CONFIDENCE = 0.85  # AcoustID's own floor is 0.6; >=0.85 = pre-checked tier
 
 
+def _conn():
+    """Raw connection with a busy_timeout so a concurrent writer (the app logging,
+    another cleanup thread) makes us wait rather than fail with 'database is
+    locked'. WAL is already enabled DB-wide by db.init()."""
+    c = sqlite3.connect(DB_PATH)
+    c.execute('PRAGMA busy_timeout=10000')
+    return c
+
+
 def _norm(s) -> str:
     return ' '.join((s or '').split()).lower()
 
@@ -100,7 +109,7 @@ def _backed_up_paths(paths: list) -> set:
     if not paths:
         return set()
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _conn()
         ph = ','.join('?' * len(paths))
         rows = conn.execute(
             f'SELECT DISTINCT path FROM tag_backups WHERE path IN ({ph})', paths
@@ -126,7 +135,7 @@ def _apply_one_sync(full: str, artist, title, db_artist, db_album) -> bool:
             original[k] = list(m.get(k, []))
         except Exception:
             original[k] = []
-    conn = sqlite3.connect(DB_PATH)
+    conn = _conn()
     _ensure_table(conn)
     conn.execute('INSERT INTO tag_backups (path, original) VALUES (?, ?)',
                  (full, json.dumps(original)))
@@ -203,7 +212,7 @@ async def undo(folder: str) -> dict:
     paths = [os.path.join(folder, f) for f in _list_audio(folder)]
     if not paths:
         return {'restored': 0}
-    conn = sqlite3.connect(DB_PATH)
+    conn = _conn()
     _ensure_table(conn)
     ph = ','.join('?' * len(paths))
     rows = conn.execute(
@@ -224,7 +233,7 @@ async def undo(folder: str) -> dict:
         del_ids.extend(rid for rid, _ in snaps)  # only clear what we restored
 
     if del_ids:
-        conn = sqlite3.connect(DB_PATH)
+        conn = _conn()
         conn.execute('DELETE FROM tag_backups WHERE id IN (%s)'
                      % ','.join('?' * len(del_ids)), del_ids)
         conn.commit()

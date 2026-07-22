@@ -132,6 +132,14 @@ async def _migrate(conn):
             created_at  TEXT DEFAULT (datetime('now'))
         )''',
         'CREATE INDEX IF NOT EXISTS idx_tag_backups_path ON tag_backups(path)',
+        # Records file relocations done by the stray-file cleanup so they can be
+        # moved back. Reversibility for organize/move, like tag_backups is for tags.
+        '''CREATE TABLE IF NOT EXISTS file_moves (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            src         TEXT NOT NULL,
+            dst         TEXT NOT NULL,
+            created_at  TEXT DEFAULT (datetime('now'))
+        )''',
     ]:
         try:
             await conn.execute(sql)

@@ -835,6 +835,80 @@ async def tagfix_undo(album_id: int):
     return result
 
 
+@app.post('/api/library/enrich-imported', status_code=202)
+async def enrich_imported():
+    """Background: fill in imported artists' photos + full discographies from the
+    catalog (confident name match required — skips soundtrack/junk 'artists').
+    Synced albums are wanted=0, so nothing auto-downloads."""
+    asyncio.create_task(_task(processor.enrich_all_imported()))
+    return {'queued': True}
+
+
+@app.get('/api/library/cleanup/preview')
+async def cleanup_preview():
+    """READ ONLY: what the stray-file rescue would tag/relocate. No writes."""
+    import cleanup
+    p = await cleanup.plan()
+    return {
+        'total': p['total'], 'actionable': p['actionable'],
+        'unresolvable': p['unresolvable'],
+        'sample': [{'path': i['path'], 'artist': i['artist'], 'title': i['title'],
+                    'in_root': i['in_root'], 'score': i['score']}
+                   for i in p['items'][:50]],
+    }
+
+
+@app.post('/api/library/cleanup', status_code=200)
+async def cleanup_apply():
+    """Tag stray files (originals backed up) and relocate root-level strays into
+    the artist's folder. Reversible via /undo."""
+    import cleanup
+    result = await cleanup.apply()
+    await db.log('info', f'Stray cleanup: tagged {result["tagged"]}, moved {result["moved"]}')
+    return result
+
+
+@app.post('/api/library/cleanup/undo', status_code=200)
+async def cleanup_undo():
+    """Reverse the stray cleanup: move files back + restore original tags."""
+    import cleanup
+    result = await cleanup.undo()
+    await db.log('info', f'Stray cleanup undone: moved back {result["moved_back"]}, '
+                         f'tags restored {result["tags_restored"]}')
+    return result
+
+
+@app.get('/api/library/fix-artists/preview')
+async def fix_artists_preview():
+    """READ ONLY: dump/collab artists that would be split to a real primary."""
+    import fixartists
+    p = await fixartists.plan()
+    return {'candidates': p['candidates'], 'actionable': p['actionable'],
+            'sample': [{'from': i['old_name'], 'to': i['candidate'],
+                        'deezer': i['deezer'], 'files': i['files']}
+                       for i in p['items'] if i['verified'] and i['files']][:50]}
+
+
+@app.post('/api/library/fix-artists', status_code=200)
+async def fix_artists():
+    """Retag dump/collab artists to their real primary, regroup them (re-ingest),
+    remove the now-stale dump artist rows, and enrich the real artists.
+    Reversible via /cleanup/undo (shared tag_backups + file_moves)."""
+    import fixartists
+    import ingest
+    result = await fixartists.apply()
+    if result['files_fixed']:
+        await asyncio.to_thread(ingest.commit)   # regroup under real artists
+        async with db.connect() as conn:
+            for aid in result['fixed_ids']:
+                await conn.execute('DELETE FROM artists WHERE id = ?', (aid,))
+            await conn.commit()
+        asyncio.create_task(_task(processor.enrich_all_imported()))
+    await db.log('info', f'Fix-artists: split {result["artists_fixed"]} artists, '
+                         f'retagged {result["files_fixed"]} files')
+    return result
+
+
 @app.patch('/api/artists/{artist_id}/albums/wanted')
 async def set_all_albums_wanted(artist_id: int, wanted: bool, types: str = ''):
     """Bulk set wanted for an artist. Optional `types` (comma-separated

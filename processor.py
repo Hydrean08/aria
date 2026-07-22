@@ -3,6 +3,8 @@ import os
 import re
 import shutil
 import subprocess
+import unicodedata
+from difflib import SequenceMatcher
 
 import httpx
 import mutagen
@@ -1170,3 +1172,81 @@ async def purge_artist_files(artist: str, album_titles: list[str]) -> dict:
     if apath.startswith(root + os.sep) and os.path.isdir(apath):
         await asyncio.to_thread(shutil.rmtree, apath, True)
     return total
+
+
+# ── Imported-artist enrichment ────────────────────────────────────────────────
+# Ingested artists start thin: a Deezer/Spotify id was never resolved, so they
+# have no photo and only their on-disk album(s). Enrichment resolves them against
+# the catalog and runs the normal sync — which fills the image and the full
+# discography as wanted=0 (visible but NOT queued for download; owned albums stay
+# complete). A confident name match is REQUIRED, so soundtrack/composer/junk
+# "artists" (e.g. "Star Ocean 2") are skipped rather than force-matched to the
+# wrong band.
+
+def _name_key(s: str) -> str:
+    # Accent-fold first (so "Antonín Dvořák" == "Antonin Dvorak"), then reduce to
+    # lowercase alphanumerics.
+    s = unicodedata.normalize('NFKD', s or '')
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r'[^a-z0-9]+', '', s.lower())
+
+
+def _name_match(a: str, b: str) -> bool:
+    """Accent-insensitive, punctuation-insensitive, with a conservative fuzzy
+    fallback so a real artist named slightly differently still matches while a
+    genuinely different name does not."""
+    ka, kb = _name_key(a), _name_key(b)
+    if not ka or not kb:
+        return False
+    if ka == kb:
+        return True
+    return SequenceMatcher(None, ka, kb).ratio() >= 0.9
+
+
+async def enrich_artist(artist_id: int) -> dict:
+    async with db.connect() as conn:
+        row = await (await conn.execute(
+            'SELECT name, deezer_id FROM artists WHERE id = ?', (artist_id,)
+        )).fetchone()
+    if not row:
+        return {'matched': False, 'reason': 'not found'}
+    name, deezer_id = row
+    dz = await deezer.search_artist(name)
+    if not dz or not _name_match(dz.get('name'), name):
+        return {'matched': False, 'name': name,
+                'reason': f'no confident match'
+                          + (f' (deezer said "{dz.get("name")}")' if dz else '')}
+    deezer_id = str(dz['id'])
+    async with db.connect() as conn:
+        await conn.execute(
+            'UPDATE artists SET deezer_id = ?, image_url = coalesce(image_url, ?) WHERE id = ?',
+            (deezer_id, dz.get('picture_medium'), artist_id))
+        await conn.commit()
+    await sync_artist(name, deezer_id)  # Spotify-primary: full discography + image
+    return {'matched': True, 'name': name, 'deezer_id': deezer_id}
+
+
+async def enrich_all_imported() -> dict:
+    """Bulk-enrich every not-yet-resolved imported artist. Long-running (one
+    catalog sync each) — run as a background task."""
+    async with db.connect() as conn:
+        rows = await (await conn.execute(
+            "SELECT id, name FROM artists WHERE imported = 1 "
+            "AND (deezer_id IS NULL OR deezer_id = '') ORDER BY name"
+        )).fetchall()
+    total = len(rows)
+    await db.log('info', f'Artist enrichment starting: {total} imported artists')
+    matched = skipped = 0
+    for aid, _name in rows:
+        try:
+            r = await enrich_artist(aid)
+            matched += 1 if r.get('matched') else 0
+            skipped += 0 if r.get('matched') else 1
+        except Exception:
+            skipped += 1
+        if (matched + skipped) % 25 == 0:
+            await db.log('info', f'Enrichment progress: {matched + skipped}/{total} '
+                                 f'({matched} enriched, {skipped} skipped)')
+    await db.log('info', f'Artist enrichment done: {matched} enriched, '
+                         f'{skipped} skipped of {total}')
+    return {'total': total, 'matched': matched, 'skipped': skipped}

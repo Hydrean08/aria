@@ -1033,6 +1033,20 @@ async function loadStats() {
     }
   }
 
+  async function enrichImported() {
+    if (!confirm('Fill in your imported artists with their photos and full discographies?\n\n'
+      + 'Runs in the background (a few minutes) — pulls each artist\'s catalog from Spotify/Deezer. '
+      + 'Nothing auto-downloads (extra albums show as available to want). Ambiguous / soundtrack '
+      + 'names with no confident match are skipped.')) return;
+    try {
+      await api('POST', '/library/enrich-imported');
+      alert('Enrichment started — watch the Activity Log. Artists will gain photos and full '
+        + 'discographies over the next few minutes; refresh to see them fill in.');
+    } catch (e) {
+      alert('Could not start enrichment: ' + (e.message || e));
+    }
+  }
+
   function toggleLogs() {
     logsCollapsed = !logsCollapsed;
     document.getElementById('log-body').classList.toggle('collapsed', logsCollapsed);
@@ -1073,6 +1087,7 @@ async function loadStats() {
     triggerCycle: () => triggerCycle(),
     scanExisting: () => scanExistingLibrary(),
     importLibrary: () => importLibrary(),
+    enrichImported: () => enrichImported(),
     openModal: (el) => openModal(el.dataset.modal),
     closeModal: (el) => closeModal(el.dataset.modal),
     loadDigestRefresh: () => loadDigest(true),
