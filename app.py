@@ -909,6 +909,43 @@ async def fix_artists():
     return result
 
 
+# ── Arion app OTA (serve the mobile APK for in-app self-update) ────────────────
+# These live OUTSIDE /api, so the api-key middleware doesn't gate them — the phone
+# downloads the APK via a plain browser link that can't carry the key, and the
+# Arion build is public anyway.
+
+_APK_DIR = os.getenv('APK_DIR', '/apk')
+
+
+def _latest_arion_apk():
+    try:
+        files = [f for f in os.listdir(_APK_DIR)
+                 if f.startswith('arion-') and f.endswith('.apk')]
+        files.sort(key=lambda f: os.path.getmtime(os.path.join(_APK_DIR, f)), reverse=True)
+        return files[0] if files else None
+    except Exception:
+        return None
+
+
+@app.get('/app/version')
+async def app_version():
+    """Latest published Arion APK + its download path (for the app's OTA check)."""
+    latest = _latest_arion_apk()
+    return {'apkLatest': latest, 'apkUrl': f'/app/apk/{latest}' if latest else None}
+
+
+@app.get('/app/apk/{filename}')
+async def app_apk(filename: str):
+    """Serve a published Arion APK. Whitelisted filename blocks path traversal."""
+    if not re.fullmatch(r'arion-[A-Za-z0-9._-]+\.apk', filename):
+        raise HTTPException(404, 'Not found')
+    path = os.path.join(_APK_DIR, filename)
+    if not os.path.isfile(path):
+        raise HTTPException(404, 'Not found')
+    return FileResponse(path, media_type='application/vnd.android.package-archive',
+                        filename=filename)
+
+
 @app.patch('/api/artists/{artist_id}/albums/wanted')
 async def set_all_albums_wanted(artist_id: int, wanted: bool, types: str = ''):
     """Bulk set wanted for an artist. Optional `types` (comma-separated
@@ -994,7 +1031,12 @@ async def get_downloads(limit: int = 100):
         'id': r[0], 'kind': r[1], 'artist': r[2], 'album': r[3], 'title': r[4],
         'source': r[5], 'state': r[6], 'error': r[7], 'at': r[8],
     } for r in rows]
-    active = sum(1 for it in items if it['state'] in ('queued', 'downloading'))
+    # Count over the whole table, not just the returned page — counting the page
+    # under-reports the badge as soon as there are more rows than `limit`.
+    async with db.connect() as conn:
+        active = (await (await conn.execute(
+            "SELECT COUNT(*) FROM downloads WHERE state IN ('queued', 'downloading')"
+        )).fetchone())[0]
     return {'active': active, 'items': items}
 
 

@@ -51,6 +51,15 @@ async def init(path: str):
         await db.commit()
         await _migrate(db)
         await db.execute("UPDATE albums SET status = 'missing' WHERE status = 'downloading'")
+        # Same idea for the download activity feed: a job that was mid-flight when
+        # the process died can never be advanced by its (now gone) task, so it
+        # would sit in 'downloading' forever and inflate the app's active badge.
+        # Mark it interrupted rather than leaving a phantom in-progress row.
+        await db.execute(
+            "UPDATE downloads SET state = 'failed', "
+            "error = coalesce(error, 'Interrupted — Aria restarted') "
+            "WHERE state IN ('queued', 'downloading')"
+        )
         await db.commit()
 
 
