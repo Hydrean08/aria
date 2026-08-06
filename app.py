@@ -31,7 +31,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import ai_suggest
 import db
 import processor
-from sources import deezer, navidrome, spotiflac, spotify
+from sources import audiomuse, deezer, navidrome, spotiflac, spotify
 from tagger import safe_name as _safe_name
 
 _MUSIC_DIR = os.getenv('MUSIC_DIR', '/music')
@@ -270,12 +270,22 @@ async def _run_releases_watch():
 
 
 async def _grounded_playlist(names: list[str], mood: str | None = None,
-                             discovery: bool = False) -> dict | None:
+                             discovery: bool = False, sonic: bool = False,
+                             size: int = 12) -> dict | None:
     """Build a playlist from tracks the listener OWNS: the AI picks a theme + owned
     artists, Navidrome supplies the real tracks, the AI curates the final order.
     Every track carries its Navidrome id, so 'Add to Navidrome' is instant and
     complete. Falls back to the discovery generator when discovery is requested,
-    Navidrome isn't configured, or the library can't fill the theme."""
+    Navidrome isn't configured, or the library can't fill the theme.
+
+    With sonic=True the curated picks are ALSO used as seeds for AudioMuse, which
+    expands them by how the music actually sounds (audio embeddings) rather than
+    how it is described. The expensive stages — plan, pool build, curate — run
+    exactly ONCE and are shared: if the sonic expansion can't fill the playlist we
+    simply return the curated tracks we already have, so falling back costs no
+    extra LLM round-trip. (An earlier split into two functions re-ran the whole
+    plan+curate pipeline on every fallback — two 5-30s LLM rounds for one result.)
+    """
     async def _discovery():
         return await (ai_suggest.build_mood_playlist(names, mood) if mood
                       else ai_suggest.build_playlist(names))
@@ -294,10 +304,30 @@ async def _grounded_playlist(names: list[str], mood: str | None = None,
         pool = await navidrome.library_tracks_for_artists(universe[:25])
     if not pool:
         return await _discovery()   # nothing owned to draw from — better a playlist than none
-    chosen = await ai_suggest.curate_from_pool(plan['name'], plan['description'], pool, 12)
+    chosen = await ai_suggest.curate_from_pool(plan['name'], plan['description'], pool, size)
     if not chosen:
         return None
     tracks = [{'artist': t['artist'], 'title': t['title'], 'nav_id': t['id']} for t in chosen]
+
+    if sonic and audiomuse.configured():
+        seeds = tracks[:max(3, size // 4)]
+        expanded = await audiomuse.expand_seeds(seeds, target=size)
+        # Require a FULL playlist. A thin/partial AudioMuse index can return just
+        # the seeds plus a track or two; accepting that would hand back a 4-track
+        # playlist when the curated 12 are already in hand.
+        if len(expanded) >= size:
+            return {
+                'name': plan['name'],
+                'description': (plan['description'] or '').strip()
+                               + ('  ' if plan.get('description') else '')
+                               + '(sonically matched)',
+                'track_list': json.dumps([
+                    {'artist': t.get('artist'), 'title': t.get('title'),
+                     'nav_id': t.get('nav_id')} for t in expanded if t.get('title')
+                ]),
+            }
+        # else: fall through and use the curated tracks — already computed.
+
     return {'name': plan['name'], 'description': plan['description'],
             'track_list': json.dumps(tracks)}
 
@@ -878,6 +908,90 @@ async def cleanup_undo():
     return result
 
 
+# ── Sonic similarity (AudioMuse) ──────────────────────────────────────────────
+
+# Hard ceiling on every `n` below. These values reach a Python round-robin loop
+# (audiomuse.expand_seeds) and AudioMuse's own query, so an unbounded n from the
+# query string would spin the event loop and wedge the whole app, not just the
+# one request.
+_SONIC_MAX_N = 50
+
+
+def _clamp_n(n: int) -> int:
+    return max(1, min(int(n), _SONIC_MAX_N))
+
+
+@app.get('/api/sonic/status')
+async def sonic_status():
+    """Whether sonic features are usable, so the UI can hide them when not."""
+    return await audiomuse.status()
+
+
+@app.get('/api/sonic/similar')
+async def sonic_similar(title: str, artist: str, n: int = 10):
+    """Tracks in your library that SOUND like this one."""
+    if not audiomuse.configured():
+        raise HTTPException(503, 'AudioMuse is not configured')
+    n = _clamp_n(n)
+    return {'seed': {'title': title, 'artist': artist},
+            'tracks': await audiomuse.similar_tracks(title, artist, n=n)}
+
+
+@app.get('/api/albums/{album_id}/similar')
+async def album_similar(album_id: int, n: int = 12):
+    """Sonic neighbours for an album — seeded from its own tracks, so the result
+    reflects the whole record rather than one arbitrary song. Excludes tracks by
+    the same artist, which would otherwise crowd out actual discoveries."""
+    if not audiomuse.configured():
+        raise HTTPException(503, 'AudioMuse is not configured')
+    n = _clamp_n(n)
+    ref = await _album_disk_ref(album_id)
+    if not ref:
+        raise HTTPException(404, 'Album not found')
+    artist_name, album_title = ref[0], ref[1]
+    tracks = await deezer_album_track_titles(album_id)
+    seeds = [{'artist': artist_name, 'title': t} for t in tracks[:4]]
+    if not seeds:
+        raise HTTPException(404, 'No tracks known for this album')
+    # Over-fetch deliberately. An album's nearest neighbours are heavily its OWN
+    # artist (especially a covers/series record), and we drop those below — at
+    # 1:1 the same-artist filter starves the result (asking for 12 returned 4).
+    found = await audiomuse.expand_seeds(seeds, target=(n + len(seeds)) * 4,
+                                         per_seed=max(10, n))
+    same = artist_name.strip().lower()
+    out = [t for t in found
+           if (t.get('artist') or '').strip().lower() != same][:n]
+    return {'album': album_title, 'artist': artist_name, 'tracks': out}
+
+
+async def deezer_album_track_titles(album_id: int) -> list[str]:
+    """Track titles for an album, preferring what's actually on disk (ground
+    truth) and falling back to the Deezer listing."""
+    ref = await _album_disk_ref(album_id)
+    if ref:
+        info = await processor.list_album_files(ref[0], ref[1], ref[2])
+        names = [os.path.splitext(f['name'])[0] for f in info.get('files', [])]
+        # Strip common "01 - " / "01. " track-number prefixes.
+        cleaned = [re.sub(r'^\s*\d+\s*[-._)]*\s*', '', n) for n in names]
+        cleaned = [c for c in cleaned if c]
+        if cleaned:
+            return cleaned
+    try:
+        tracks = await album_tracks(album_id)
+        return [t['title'] for t in tracks if t.get('title')]
+    except Exception:
+        return []
+
+
+@app.get('/api/sonic/search')
+async def sonic_search(q: str, n: int = 12):
+    """Find tracks by how they SOUND, from a plain description
+    ('dreamy shoegaze with heavy reverb') — CLAP text-to-audio search."""
+    if not audiomuse.configured():
+        raise HTTPException(503, 'AudioMuse is not configured')
+    return {'query': q, 'tracks': await audiomuse.search_by_sound(q, n=_clamp_n(n))}
+
+
 @app.get('/api/library/fix-artists/preview')
 async def fix_artists_preview():
     """READ ONLY: dump/collab artists that would be split to a real primary."""
@@ -1367,6 +1481,8 @@ async def delete_ai_playlist(playlist_id: int):
 class MoodIn(BaseModel):
     mood: str
     discovery: bool = False
+    # None = auto (use sonic expansion whenever AudioMuse is available).
+    sonic: bool | None = None
 
 
 @app.post('/api/ai-playlists/mood', status_code=202)
@@ -1378,6 +1494,9 @@ async def generate_mood_playlist(body: MoodIn):
     if not mood:
         raise HTTPException(400, 'mood is required')
     discovery = bool(body.discovery)
+    # Default ON when AudioMuse is available — a sonically coherent playlist is
+    # the better result; falls back automatically when it can't be built.
+    sonic = audiomuse.configured() if body.sonic is None else bool(body.sonic)
 
     async def _run_mood():
         async with db.connect() as conn:
@@ -1385,7 +1504,10 @@ async def generate_mood_playlist(body: MoodIn):
                 'SELECT name FROM artists WHERE monitored = 1'
             )).fetchall()
         names = [r[0] for r in rows]
-        playlist = await _grounded_playlist(names, mood, discovery=discovery)
+        # One pipeline: sonic expansion is attempted inside, and falls back to the
+        # already-curated tracks without re-running plan/curate.
+        playlist = await _grounded_playlist(names, mood, discovery=discovery,
+                                            sonic=sonic and not discovery)
         if not playlist:
             await db.log('warn', f'AI mood playlist failed: {mood!r}')
             return

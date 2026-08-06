@@ -659,6 +659,18 @@
     .tagfix-low  { background: #eab30820; color: var(--yellow); }
     .tagfix-none { background: #64748b20; color: var(--muted); }
     .tagfix-actions { display: flex; gap: 8px; margin-top: 10px; }
+
+    /* ── Sonic similarity ── */
+    .album-sonic { margin-top: 4px; }
+    .sonic-head { font-size: 11px; font-weight: 700; letter-spacing: .5px; color: var(--muted); text-transform: uppercase; margin-bottom: 8px; }
+    .sonic-row { display: flex; align-items: center; gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 12px; }
+    .sonic-main { flex: 1; min-width: 0; }
+    .sonic-title { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sonic-sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sonic-dist { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: #7c6aff20; color: var(--accent); font-weight: 700; flex-shrink: 0; }
+    .opt-row { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; color: var(--muted); line-height: 1.4; margin: -4px 0 4px; }
+    .opt-row input { margin-top: 2px; flex-shrink: 0; }
+    .opt-row em { color: var(--text); font-style: italic; }
   </style>
 </head>
 <body>
@@ -852,7 +864,9 @@
     <div class="track-list" id="album-track-list"></div>
     <div id="album-disk-section" class="album-disk"></div>
     <div id="album-tagfix-section" class="album-tagfix"></div>
+    <div id="album-sonic-section" class="album-sonic"></div>
     <div class="modal-actions">
+      <button class="ghost sm" id="btn-more-like-this" data-act="moreLikeThis" title="Find tracks in your library that SOUND like this album">More like this</button>
       <button class="ghost sm" id="btn-fix-tags" data-act="fixTags" title="Fingerprint tracks and propose corrected tags">Fix tags</button>
       <button class="danger sm" id="btn-delete-album-disk" data-act="deleteAlbumDisk" style="display:none">Delete from disk</button>
       <button class="ghost" data-act="closeModal" data-modal="modal-album-tracks">Close</button>
@@ -895,6 +909,10 @@
     <p class="modal-sub">Describe a mood, vibe, occasion, or theme. AI picks 12 tracks.</p>
     <input type="text" id="input-mood" placeholder="e.g. rainy Sunday, workout pump, late-night drive"
            data-enter="submitMoodPlaylist" autofocus>
+    <label class="opt-row" id="sonic-opt-row" style="display:none">
+      <input type="checkbox" id="input-sonic" checked>
+      <span>Sonically matched — expand by how tracks actually <em>sound</em>, not just their description</span>
+    </label>
     <div class="modal-actions">
       <button class="ghost" data-act="closeModal" data-modal="modal-mood-playlist">Cancel</button>
       <button data-act="submitMoodPlaylist">Generate</button>

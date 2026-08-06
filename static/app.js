@@ -273,6 +273,7 @@ async function loadStats() {
   async function loadAlbumDisk(albumId) {
     _diskAlbumId = albumId;
     document.getElementById('album-tagfix-section').innerHTML = '';
+    document.getElementById('album-sonic-section').innerHTML = '';
     const sec = document.getElementById('album-disk-section');
     const delBtn = document.getElementById('btn-delete-album-disk');
     sec.innerHTML = '<div class="loading">Checking disk…</div>';
@@ -323,6 +324,50 @@ async function loadStats() {
       await loadStats();
     } catch (e) {
       alert('Could not delete album files: ' + (e.message || e));
+    }
+  }
+
+  // ── Sonic similarity (AudioMuse) ─────────────────────────────────────
+
+  let _sonicAvailable = false;
+
+  async function loadSonicStatus() {
+    try {
+      const s = await api('GET', '/sonic/status');
+      _sonicAvailable = !!s.available;
+    } catch (_) { _sonicAvailable = false; }
+    // Only offer sonic features when the backend can actually serve them.
+    const btn = document.getElementById('btn-more-like-this');
+    if (btn) btn.style.display = _sonicAvailable ? '' : 'none';
+    const row = document.getElementById('sonic-opt-row');
+    if (row) row.style.display = _sonicAvailable ? '' : 'none';
+  }
+
+  async function moreLikeThis() {
+    if (!_diskAlbumId) return;
+    const sec = document.getElementById('album-sonic-section');
+    sec.innerHTML = '<div class="loading">Finding tracks that sound like this…</div>';
+    try {
+      const r = await api('GET', `/albums/${_diskAlbumId}/similar?n=12`);
+      if (!r.tracks || !r.tracks.length) {
+        sec.innerHTML = '<div class="disk-empty">No sonic matches found — this album may not be analyzed yet.</div>';
+        return;
+      }
+      sec.innerHTML =
+        `<div class="sonic-head">Sounds like ${esc(r.album)} · ${r.tracks.length} tracks in your library</div>` +
+        r.tracks.map(t => {
+          // distance -> a friendlier 0-100 "match" score; nearer is better.
+          const pct = t.distance != null ? Math.max(0, Math.round((1 - t.distance) * 100)) : null;
+          return `<div class="sonic-row">
+            <div class="sonic-main">
+              <div class="sonic-title">${esc(t.title || '')}</div>
+              <div class="sonic-sub">${esc(t.artist || '')}${t.album ? ' · ' + esc(t.album) : ''}${t.genre ? ' · ' + esc(t.genre) : ''}</div>
+            </div>
+            ${pct != null ? `<span class="sonic-dist">${pct}%</span>` : ''}
+          </div>`;
+        }).join('');
+    } catch (e) {
+      sec.innerHTML = `<div class="disk-empty">Sonic search failed: ${esc(e.message || String(e))}</div>`;
     }
   }
 
@@ -701,7 +746,10 @@ async function loadStats() {
     if (!mood) return;
     input.disabled = true;
     try {
-      await api('POST', '/ai-playlists/mood', { mood });
+      const sonicEl = document.getElementById('input-sonic');
+      const body = { mood };
+      if (_sonicAvailable && sonicEl) body.sonic = sonicEl.checked;
+      await api('POST', '/ai-playlists/mood', body);
       closeModal('modal-mood-playlist');
       input.value = '';
       input.disabled = false;
@@ -1117,6 +1165,7 @@ async function loadStats() {
     onDropRowClick: (el) => onDropRowClick(el),
     deleteDiskFile: (el) => deleteDiskFile(el),
     deleteAlbumDisk: () => deleteAlbumDisk(),
+    moreLikeThis: () => moreLikeThis(),
     fixTags: () => fixTags(),
     applyTagFix: () => applyTagFix(),
     undoTagFix: () => undoTagFix(),
@@ -1179,6 +1228,7 @@ async function loadStats() {
 
   (async () => {
     wireEvents();
+    loadSonicStatus();   // gates the sonic UI; non-blocking
     await Promise.all([loadStats(), loadArtists(), loadLogs()]);
     showHome();
     setInterval(refresh, 10000);
